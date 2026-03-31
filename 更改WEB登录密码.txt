@@ -1,0 +1,25 @@
+第一步：生成新密码哈希，进入项目目录并激活虚拟环境：
+cd /root/asset_manager
+source venv/bin/activate
+python -c 'from werkzeug.security import generate_password_hash; print(generate_password_hash("Plex0819$"))'
+生成如下哈希值：
+scrypt:32768:8:1$o1bKFuV4jADc7wvU$9519f75d1d1c0a06f425bd33870d0ad06de1a8f0ee84a97240a2167119c0e1f7893a6b0c0096d33526cef6c24b7f4274dca78fd373240c69d2c000ed5f9a410c
+
+第二步：进入数据库：
+mysql -u root -p
+执行：
+
+USE asset_manager;
+UPDATE users
+SET password_hash = 'scrypt:32768:8:1$o1bKFuV4jADc7wvU$9519f75d1d1c0a06f425bd33870d0ad06de1a8f0ee84a97240a2167119c0e1f7893a6b0c0096d33526cef6c24b7f4274dca78fd373240c69d2c000ed5f9a410'
+WHERE username = 'admin';
+
+SELECT id, username FROM users;
+
+
+更快的做法：一条命令直接改
+
+cd /root/asset_manager
+source venv/bin/activate
+NEW_HASH=$(python -c 'from werkzeug.security import generate_password_hash; print(generate_password_hash("Plex0819$"))')
+mysql -u root -p -e "USE asset_manager; UPDATE users SET password_hash='${NEW_HASH}' WHERE username='admin'; SELECT id,username FROM users;"
