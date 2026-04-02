@@ -231,11 +231,12 @@ install_packages() {
     apt-get install -y \
         nginx mariadb-server cron curl unzip \
         python3 python3-venv python3-pip python3-dev \
-        build-essential default-libmysqlclient-dev pkg-config
+        build-essential default-libmysqlclient-dev pkg-config \
+        tesseract-ocr tesseract-ocr-chi-sim
     systemctl enable --now mariadb
     systemctl enable --now nginx
     systemctl enable --now cron
-    ok "系统依赖安装完成"
+    ok "系统依赖安装完成（已包含OCR依赖）"
 }
 
 prepare_dirs() {
@@ -289,8 +290,8 @@ setup_python_env() {
     . "$VENV_DIR/bin/activate"
     pip install --upgrade pip wheel setuptools
     pip install -r "$APP_ROOT/requirements.txt"
-    pip install pymysql gunicorn
-    ok "Python 环境准备完成"
+    pip install pymysql gunicorn Pillow pytesseract
+    ok "Python 环境准备完成（已包含OCR Python依赖）"
 }
 
 setup_database() {
