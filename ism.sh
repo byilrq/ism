@@ -19,6 +19,7 @@ CONFIG_URL="${RAW_BASE}/config.py"
 RUN_URL="${RAW_BASE}/run.py"
 REQ_URL="${RAW_BASE}/requirements.txt"
 SQL_URL="${RAW_BASE}/asset_manager.sql"
+ROUTES_INIT_URL="${RAW_BASE}/__init__.py"
 
 TMP_DIR="/tmp/asset_manager_install"
 DB_NAME="asset_manager"
@@ -49,18 +50,18 @@ OPENLIST_MOUNT_SERVICE="/etc/systemd/system/openlist-webdav.service"
 NC='\033[0m'
 BOLD='\033[1m'
 DIM='\033[2m'
-GREEN='\033[32m'
-YELLOW='\033[33m'
-RED='\033[31m'
-CYAN='\033[36m'
-BLUE='\033[34m'
-MAGENTA='\033[35m'
+GREEN='\033[92m'
+YELLOW='\033[93m'
+RED='\033[91m'
+CYAN='\033[96m'
+BLUE='\033[94m'
+MAGENTA='\033[95m'
 WHITE='\033[97m'
 
-green() { printf '\033[32m%s\033[0m\n' "$*"; }
-yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
-red() { printf '\033[31m%s\033[0m\n' "$*"; }
-cyan() { printf '\033[36m%s\033[0m\n' "$*"; }
+green() { printf '\033[92m%s\033[0m\n' "$*"; }
+yellow() { printf '\033[93m%s\033[0m\n' "$*"; }
+red() { printf '\033[91m%s\033[0m\n' "$*"; }
+cyan() { printf '\033[96m%s\033[0m\n' "$*"; }
 
 info() { cyan "[INFO] $*"; }
 ok() { green "[OK] $*"; }
@@ -355,7 +356,7 @@ check_openlist_webdav_connectivity() {
 
 install_packages() {
     export DEBIAN_FRONTEND=noninteractive
-    info "安装系统环境依赖（含 OCR 系统包）"
+    info "安装依赖（含 OCR 系统包）"
     apt-get update
     apt-get install -y \
         nginx mariadb-server cron curl unzip \
@@ -365,7 +366,7 @@ install_packages() {
     systemctl enable --now mariadb
     systemctl enable --now nginx
     systemctl enable --now cron
-    ok "系统环境依赖安装完成"
+    ok "依赖安装完成"
 }
 
 prepare_dirs() {
@@ -381,6 +382,7 @@ download_files() {
     curl -L --fail --retry 3 -o "$TMP_DIR/run.py" "$RUN_URL"
     curl -L --fail --retry 3 -o "$TMP_DIR/requirements.txt" "$REQ_URL"
     curl -L --fail --retry 3 -o "$TMP_DIR/asset_manager.sql" "$SQL_URL"
+    curl -L --fail --retry 3 -o "$TMP_DIR/routes___init__.py" "$ROUTES_INIT_URL"
     ok "项目文件下载完成"
 }
 
@@ -410,6 +412,28 @@ deploy_files() {
 
     mkdir -p "$ASSET_IMG_DIR" "$ACCESSORY_IMG_DIR"
     ok "应用文件已部署"
+}
+
+sync_custom_files() {
+    info "同步你维护的两个核心文件：routes/__init__.py 和 asset_manager.sql"
+
+    mkdir -p "${APP_DIR}/routes"
+
+    if [ -f "$TMP_DIR/routes___init__.py" ]; then
+        cp -f "$TMP_DIR/routes___init__.py" "${APP_DIR}/routes/__init__.py"
+    else
+        err "未找到 $TMP_DIR/routes___init__.py"
+        return 1
+    fi
+
+    if [ -f "$TMP_DIR/asset_manager.sql" ]; then
+        cp -f "$TMP_DIR/asset_manager.sql" "$APP_ROOT/asset_manager.sql"
+    else
+        err "未找到 $TMP_DIR/asset_manager.sql"
+        return 1
+    fi
+
+    ok "已覆盖 routes/__init__.py 和 asset_manager.sql"
 }
 
 setup_python_env() {
@@ -619,7 +643,7 @@ restore_database() {
 }
 
 restart_service() {
-    info "重启程序"
+    info "重启系统"
     systemctl daemon-reload
     systemctl enable "$SERVICE_NAME"
     systemctl restart "$SERVICE_NAME"
@@ -630,33 +654,48 @@ install_asset_system() {
     prepare_dirs
     download_files
     deploy_files
+    sync_custom_files
     setup_python_env
     setup_database
     write_systemd
     configure_nginx
 
-    ok "资产管理系统安装完成"
+    ok "系统安装完成"
     echo
     echo "内部 Gunicorn 端口：127.0.0.1:${INTERNAL_PORT}"
     echo "外部 Nginx 端口：${PUBLIC_PORT}"
     echo "当前默认图片目录（未接云前）：${ASSET_IMG_DIR} 和 ${ACCESSORY_IMG_DIR}"
-    echo "若要启用 OCR，当前脚本已安装系统包与 Python 包，重启服务后即可生效。"
+    echo "本次安装最后已固定覆盖两个核心文件："
+    echo "1) ${APP_DIR}/routes/__init__.py"
+    echo "2) ${APP_ROOT}/asset_manager.sql"
+    echo "后续如 app.zip / config.py / run.py / requirements.txt 不变，你主要维护这两个文件即可。"
     echo "建议下一步顺序：4. 安装 OpenList  ->  5. 安装 WebDAV  ->  7. 设置cron备份数据库"
 }
 
 show_menu() {
     clear
-    printf "${BOLD}${BLUE}================ asset_manager + OpenList 菜单 ================${NC}\n"
-    printf "${GREEN} 1.${NC} ${WHITE}安装依赖${NC} ${DIM}(含 OCR 系统包)${NC}\n"
-    printf "${GREEN} 2.${NC} ${WHITE}安装系统${NC}\n"
-    printf "${GREEN} 3.${NC} ${WHITE}重启系统${NC}\n"
-    printf "${CYAN} 4.${NC} ${WHITE}安装 OpenList${NC}\n"
-    printf "${CYAN} 5.${NC} ${WHITE}安装 WebDAV${NC}\n"
-    printf "${CYAN} 6.${NC} ${WHITE}WebDAV 连通性检测${NC}\n"
-    printf "${MAGENTA} 7.${NC} ${WHITE}设置cron备份数据库${NC}\n"
-    printf "${MAGENTA} 8.${NC} ${WHITE}恢复数据库${NC}\n"
-    printf "${RED} 0.${NC} ${WHITE}退出${NC}\n"
-    printf "${BOLD}${BLUE}===============================================================${NC}\n"
+    printf "${BOLD}${BLUE}================ asset_manager + OpenList 菜单 ================${NC}
+"
+    printf "${GREEN} 1.${NC} ${GREEN}安装依赖${NC}
+"
+    printf "${RED} 2.${NC} ${RED}安装系统${NC}
+"
+    printf "${CYAN} 3.${NC} ${CYAN}重启系统${NC}
+"
+    printf "${CYAN} 4.${NC} ${WHITE}安装 OpenList${NC}
+"
+    printf "${CYAN} 5.${NC} ${WHITE}安装 WebDAV${NC}
+"
+    printf "${CYAN} 6.${NC} ${WHITE}WebDAV 连通性检测${NC}
+"
+    printf "${MAGENTA} 7.${NC} ${WHITE}设置cron备份数据库${NC}
+"
+    printf "${MAGENTA} 8.${NC} ${WHITE}恢复数据库${NC}
+"
+    printf "${RED} 0.${NC} ${WHITE}退出${NC}
+"
+    printf "${BOLD}${BLUE}===============================================================${NC}
+"
 }
 
 main() {
