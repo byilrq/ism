@@ -388,10 +388,27 @@ download_files() {
 
 deploy_files() {
     info "部署应用文件"
+
     if [ -d "$APP_ROOT" ] && [ -n "$(find "$APP_ROOT" -mindepth 1 -maxdepth 1 2>/dev/null)" ]; then
-        ts="$(date +%Y%m%d_%H%M%S)"
-        mv "$APP_ROOT" "${APP_ROOT}.bak.${ts}"
-        warn "检测到已有 ${APP_ROOT}，已备份为 ${APP_ROOT}.bak.${ts}"
+        echo
+        warn "检测到已有安装目录：$APP_ROOT"
+        read -r -p "是否先备份当前目录再继续安装？(Y/N): " backup_choice
+
+        case "${backup_choice:-N}" in
+            Y|y)
+                ts="$(date +%Y%m%d_%H%M%S)"
+                mv "$APP_ROOT" "${APP_ROOT}.bak.${ts}"
+                warn "已备份为 ${APP_ROOT}.bak.${ts}"
+                ;;
+            N|n)
+                warn "你选择不备份，已取消本次安装"
+                return 1
+                ;;
+            *)
+                warn "输入无效，默认取消本次安装"
+                return 1
+                ;;
+        esac
     fi
 
     mkdir -p "$APP_ROOT" "$APP_DIR" "$ASSET_IMG_DIR" "$ACCESSORY_IMG_DIR" "$BACKUP_DIR"
@@ -653,7 +670,7 @@ restart_service() {
 install_asset_system() {
     prepare_dirs
     download_files
-    deploy_files
+    deploy_files || return 1
     sync_custom_files
     setup_python_env
     setup_database
