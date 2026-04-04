@@ -4,7 +4,7 @@ import os
 import re
 import uuid
 
-from flask import request, redirect, url_for, render_template_string, send_file, send_from_directory, abort
+from flask import request, redirect, url_for, render_template_string, send_file, send_from_directory, abort, jsonify
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import check_password_hash
 from sqlalchemy import or_
@@ -19,6 +19,21 @@ from config import Config
 
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
+
+try:
+    from .ocr_recognizer import (
+        SCAN_TIMEOUT_SECONDS,
+        ScanTimeoutError,
+        extract_group_no_from_label,
+        scan_time_limit,
+    )
+except ImportError:
+    from ocr_recognizer import (
+        SCAN_TIMEOUT_SECONDS,
+        ScanTimeoutError,
+        extract_group_no_from_label,
+        scan_time_limit,
+    )
 
 
 def get_statuses():
@@ -57,6 +72,20 @@ def validate_accessory_no_format(internal_no, group_no, internal_label="附属�
     for value, label in [(normalize_text(internal_no), internal_label), (normalize_text(group_no), group_label)]:
         if value and not pattern.match(value):
             return f"{label}格式不正确，应类似 651411001001-001"
+    return ""
+
+
+def validate_asset_group_no(group_no, label="集团编号"):
+    group_no = normalize_text(group_no)
+    if group_no and not re.fullmatch(r"\d{18}", group_no):
+        return f"{label}必须为18位数字"
+    return ""
+
+
+def validate_accessory_group_no(group_no, label="附属资产集团编号"):
+    group_no = normalize_text(group_no)
+    if group_no and not re.fullmatch(r"\d{18}-\d+", group_no):
+        return f"{label}必须为18位主编号-序号"
     return ""
 
 
@@ -231,6 +260,7 @@ def delete_asset_with_files(asset):
     db.session.delete(asset)
 
 
+
 def build_search_rows(keyword="", searched=False):
     if not searched:
         return []
@@ -276,6 +306,173 @@ def build_search_rows(keyword="", searched=False):
 
         rows.sort(key=lambda x: (x["internal_no"] or x["group_no"] or ""))
         return rows
+
+    suffix_keyword = keyword[-6:] if len(keyword) >= 6 else ""
+
+    exact_assets = Asset.query.filter(
+        or_(
+            Asset.internal_no == keyword,
+            Asset.group_no == keyword
+        )
+    ).order_by(Asset.internal_no.asc()).all()
+
+    suffix_assets = []
+    if suffix_keyword:
+        suffix_assets = Asset.query.filter(
+            or_(
+                Asset.internal_no.like(f"%{suffix_keyword}"),
+                Asset.group_no.like(f"%{suffix_keyword}")
+            )
+        ).order_by(Asset.internal_no.asc()).all()
+
+    asset_ids = []
+    for a in exact_assets + suffix_assets:
+        if a.id not in asset_ids:
+            asset_ids.append(a.id)
+
+    owner_assets = Asset.query.filter(
+        Asset.owner.like(f"%{keyword}%")
+    ).order_by(Asset.internal_no.asc()).all()
+
+    for a in owner_assets:
+        if a.id not in asset_ids:
+            asset_ids.append(a.id)
+
+    exact_accessories = Accessory.query.filter(
+        or_(
+            Accessory.sub_internal_no == keyword,
+            Accessory.sub_group_no == keyword
+        )
+    ).all()
+
+    suffix_accessories = []
+    if suffix_keyword:
+        suffix_accessories = Accessory.query.filter(
+            or_(
+                Accessory.sub_internal_no.like(f"%{suffix_keyword}"),
+                Accessory.sub_group_no.like(f"%{suffix_keyword}-%")
+            )
+        ).all()
+
+    owner_accessories = Accessory.query.filter(
+        Accessory.owner.like(f"%{keyword}%")
+    ).all()
+
+    for acc in exact_accessories + suffix_accessories + owner_accessories:
+        if acc.parent_asset_id and acc.parent_asset_id not in asset_ids:
+            asset_ids.append(acc.parent_asset_id)
+
+    fuzzy_accessories = Accessory.query.filter(
+        or_(
+            Accessory.sub_internal_no.like(f"{keyword}-%"),
+            Accessory.sub_group_no.like(f"{keyword}-%")
+        )
+    ).all()
+
+    standalone_accessories = []
+    standalone_accessory_ids = set()
+    for acc in fuzzy_accessories + exact_accessories + suffix_accessories + owner_accessories:
+        resolved_parent_id = acc.parent_asset_id or resolve_parent_asset_id(
+            internal_no=acc.sub_internal_no,
+            group_no=acc.sub_group_no
+        )
+        if resolved_parent_id:
+            if resolved_parent_id not in asset_ids:
+                asset_ids.append(resolved_parent_id)
+        else:
+            if acc.id not in standalone_accessory_ids:
+                standalone_accessories.append(acc)
+                standalone_accessory_ids.add(acc.id)
+
+    if asset_ids:
+        matched_assets = Asset.query.filter(Asset.id.in_(asset_ids)).order_by(Asset.internal_no.asc()).all()
+
+        for asset in matched_assets:
+            accessories = get_asset_related_accessories(asset)
+
+            rows.append({
+                "row_type": "asset",
+                "id": asset.id,
+                "type_text": "主设备",
+                "internal_no": asset.internal_no or "",
+                "group_no": asset.group_no or "",
+                "name": asset.name,
+                "model": asset.model or "",
+                "status": asset.status or "",
+                "owner": asset.owner or "",
+                "parent_asset_id": "",
+                "accessory_count": len(accessories),
+                "detail_url": url_for("asset_detail", asset_id=asset.id)
+            })
+
+            for item in accessories:
+                rows.append({
+                    "row_type": "accessory",
+                    "id": item.id,
+                    "type_text": "配件",
+                    "internal_no": item.sub_internal_no or "",
+                    "group_no": item.sub_group_no or "",
+                    "name": item.name,
+                    "model": item.model or "",
+                    "status": item.status or "",
+                    "owner": item.owner or "",
+                    "parent_asset_id": item.parent_asset_id or resolve_parent_asset_id(item.sub_internal_no, item.sub_group_no) or "",
+                    "accessory_count": 0,
+                    "detail_url": url_for("accessory_detail", accessory_id=item.id)
+                })
+
+    existing_row_keys = {(row["row_type"], row["id"]) for row in rows}
+    for item in standalone_accessories:
+        if ("accessory", item.id) not in existing_row_keys:
+            rows.append({
+                "row_type": "accessory",
+                "id": item.id,
+                "type_text": "配件",
+                "internal_no": item.sub_internal_no or "",
+                "group_no": item.sub_group_no or "",
+                "name": item.name,
+                "model": item.model or "",
+                "status": item.status or "",
+                "owner": item.owner or "",
+                "parent_asset_id": item.parent_asset_id or "",
+                "accessory_count": 0,
+                "detail_url": url_for("accessory_detail", accessory_id=item.id)
+            })
+
+    if not rows:
+        standalone_conditions = [
+            Accessory.sub_internal_no == keyword,
+            Accessory.sub_group_no == keyword,
+            Accessory.sub_internal_no.like(f"{keyword}-%"),
+            Accessory.sub_group_no.like(f"{keyword}-%"),
+            Accessory.owner.like(f"%{keyword}%")
+        ]
+        if suffix_keyword:
+            standalone_conditions.append(Accessory.sub_internal_no.like(f"%{suffix_keyword}"))
+            standalone_conditions.append(Accessory.sub_group_no.like(f"%{suffix_keyword}-%"))
+
+        standalone_exact = Accessory.query.filter(
+            or_(*standalone_conditions)
+        ).order_by(Accessory.sub_internal_no.asc()).all()
+
+        for item in standalone_exact:
+            rows.append({
+                "row_type": "accessory",
+                "id": item.id,
+                "type_text": "配件",
+                "internal_no": item.sub_internal_no or "",
+                "group_no": item.sub_group_no or "",
+                "name": item.name,
+                "model": item.model or "",
+                "status": item.status or "",
+                "owner": item.owner or "",
+                "parent_asset_id": item.parent_asset_id or "",
+                "accessory_count": 0,
+                "detail_url": url_for("accessory_detail", accessory_id=item.id)
+            })
+
+    return rows
+
 
     exact_assets = Asset.query.filter(
         or_(
@@ -494,143 +691,65 @@ def import_devices_from_excel(file_storage):
                 db.session.add(obj)
 
 
-def normalize_ocr_digit_text(value):
-    value = normalize_text(value).upper()
-    if not value:
-        return ""
-    trans = str.maketrans({
-        "O": "0",
-        "Q": "0",
-        "D": "0",
-        "I": "1",
-        "L": "1",
-        "|": "1",
-        "Z": "2",
-        "S": "5",
-        "B": "8"
-    })
-    return value.translate(trans)
+def is_group_no_value(value):
+    value = normalize_text(value)
+    return bool(re.fullmatch(r"\d{18}", value))
 
 
-def extract_group_no_from_ocr_text(text):
-    normalized = normalize_ocr_digit_text(text)
-    if not normalized:
-        return ""
-
-    patterns = [
-        r"308[\d\-\s]{15,30}",
-        r"30[8B][\d\-\s]{15,30}",
-        r"3[0O]8[\d\-\s]{15,30}"
-    ]
-
-    for pattern in patterns:
-        for match in re.finditer(pattern, normalized):
-            digits = re.sub(r"\D", "", match.group(0))
-            if digits.startswith("308") and len(digits) >= 18:
-                return digits[:18]
-
-    digits_only = re.sub(r"\D", "", normalized)
-    for idx in range(0, max(0, len(digits_only) - 17)):
-        chunk = digits_only[idx:idx + 18]
-        if len(chunk) == 18 and chunk.startswith("308"):
-            return chunk
-
-    return ""
+def get_recognized_no_label(value):
+    return "集团编号" if is_group_no_value(value) else "内部编号"
 
 
-def extract_group_no_from_label(file_storage):
-    try:
-        from PIL import Image, ImageOps, ImageEnhance, ImageFilter
-        import pytesseract
-        pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
-    except Exception as e:
-        raise RuntimeError("服务器未安装OCR依赖，请先安装 Pillow、pytesseract 和 tesseract-ocr") from e
-
-    image_bytes = file_storage.read()
-    if not image_bytes:
-        return "", []
-
-    try:
-        img = Image.open(BytesIO(image_bytes))
-    except Exception as e:
-        raise RuntimeError("图片文件无法读取，请重新拍照后再试") from e
-
-    img = ImageOps.exif_transpose(img).convert("RGB")
-
-    max_width = 1800
-    if img.width > max_width:
-        ratio = max_width / float(img.width)
-        img = img.resize((max_width, int(img.height * ratio)))
-
-    width, height = img.size
-    crops = []
-
-    def clamp_box(left, top, right, bottom):
-        left = max(0, min(width, int(left)))
-        top = max(0, min(height, int(top)))
-        right = max(left + 1, min(width, int(right)))
-        bottom = max(top + 1, min(height, int(bottom)))
-        return (left, top, right, bottom)
-
-    crops.append(("full", img))
-    crops.append(("lower85", img.crop(clamp_box(width * 0.03, height * 0.10, width * 0.97, height * 0.95))))
-    crops.append(("lower65", img.crop(clamp_box(width * 0.05, height * 0.28, width * 0.95, height * 0.95))))
-    crops.append(("number_band", img.crop(clamp_box(width * 0.05, height * 0.52, width * 0.95, height * 0.90))))
-    crops.append(("bottom_label", img.crop(clamp_box(width * 0.05, height * 0.58, width * 0.95, height * 0.98))))
-
-    debug_texts = []
-    configs = [
-        "--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789-",
-        "--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789-"
-    ]
-
-    for crop_name, crop in crops:
-        gray = ImageOps.grayscale(crop)
-        variants = []
-
-        enlarged = gray.resize((gray.width * 2, gray.height * 2))
-        variants.append((f"{crop_name}_gray", enlarged))
-
-        contrast = ImageEnhance.Contrast(enlarged).enhance(2.5)
-        sharp = ImageEnhance.Sharpness(contrast).enhance(2.0)
-        variants.append((f"{crop_name}_sharp", sharp))
-
-        threshold = sharp.point(lambda p: 255 if p > 165 else 0)
-        variants.append((f"{crop_name}_th", threshold))
-
-        median = threshold.filter(ImageFilter.MedianFilter(size=3))
-        variants.append((f"{crop_name}_med", median))
-
-        for variant_name, variant in variants:
-            for config in configs:
-                raw_text = pytesseract.image_to_string(variant, lang="eng", config=config)
-                raw_text = normalize_text(raw_text)
-                if raw_text:
-                    debug_texts.append(f"{variant_name}: {raw_text}")
-                    group_no = extract_group_no_from_ocr_text(raw_text)
-                    if group_no:
-                        return group_no, debug_texts
-
-    merged = " ".join(debug_texts)
-    return extract_group_no_from_ocr_text(merged), debug_texts
-
-
-def resolve_scan_target(group_no):
-    group_no = normalize_text(group_no)
-    if not group_no:
+def resolve_scan_target(recognized_no):
+    recognized_no = normalize_text(recognized_no)
+    if not recognized_no:
         return None, []
 
-    rows = build_search_rows(keyword=group_no, searched=True)
+    rows = build_search_rows(keyword=recognized_no, searched=True)
     if not rows:
         return None, []
 
-    asset_row = next((row for row in rows if row.get("row_type") == "asset" and normalize_text(row.get("group_no")) == group_no), None)
+    asset_row = next(
+        (
+            row for row in rows
+            if row.get("row_type") == "asset"
+            and (
+                normalize_text(row.get("group_no")) == recognized_no
+                or normalize_text(row.get("internal_no")) == recognized_no
+            )
+        ),
+        None,
+    )
     if asset_row:
         return asset_row, rows
 
-    accessory_row = next((row for row in rows if row.get("row_type") == "accessory" and normalize_text(row.get("group_no")).startswith(group_no)), None)
+    accessory_row = next(
+        (
+            row for row in rows
+            if row.get("row_type") == "accessory"
+            and (
+                normalize_text(row.get("group_no")) == recognized_no
+                or normalize_text(row.get("internal_no")) == recognized_no
+            )
+        ),
+        None,
+    )
     if accessory_row:
         return accessory_row, rows
+
+    accessory_prefix_row = next(
+        (
+            row for row in rows
+            if row.get("row_type") == "accessory"
+            and (
+                normalize_text(row.get("group_no")).startswith(f"{recognized_no}-")
+                or normalize_text(row.get("internal_no")).startswith(f"{recognized_no}-")
+            )
+        ),
+        None,
+    )
+    if accessory_prefix_row:
+        return accessory_prefix_row, rows
 
     return rows[0], rows
 
@@ -742,6 +861,7 @@ def register_routes(app):
     def scan_label():
         error = ""
         recognized_no = ""
+        recognized_label = "资产编号"
         debug_texts = []
         target_row = None
         matched_rows = []
@@ -752,23 +872,32 @@ def register_routes(app):
                 error = "请先拍照或上传标签图片"
             else:
                 try:
-                    recognized_no, debug_texts = extract_group_no_from_label(scan_file)
+                    with scan_time_limit(SCAN_TIMEOUT_SECONDS):
+                        recognized_no, debug_texts = extract_group_no_from_label(scan_file)
                     if not recognized_no:
-                        error = "未识别到308开头的18位集团资产编号，请尽量只拍一张标签并让编号区域更清晰"
+                        error = "未识别到有效资产编号，请尽量只拍一张标签并让编号区域更清晰"
                     else:
+                        recognized_label = get_recognized_no_label(recognized_no)
                         target_row, matched_rows = resolve_scan_target(recognized_no)
+                except ScanTimeoutError:
+                    error = f"识别超时，已自动终止（超过{SCAN_TIMEOUT_SECONDS}秒）"
                 except Exception as e:
                     error = f"识别失败：{str(e)}"
 
-        return render_template_string(
+        rendered_html = render_template_string(
             SCAN_LABEL_HTML,
             current_user=current_user,
             recognized_no=recognized_no,
+            recognized_label=recognized_label,
             debug_texts=debug_texts,
             target_row=target_row,
             matched_rows=matched_rows,
-            error=error
+            error=error,
+            timeout_seconds=SCAN_TIMEOUT_SECONDS
         )
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return jsonify({"html": rendered_html})
+        return rendered_html
 
     @app.route("/export", methods=["POST"])
     @login_required
@@ -904,11 +1033,16 @@ def register_routes(app):
 
         device_type = normalize_text(request.args.get("type")) or "主设备"
         parent_asset_id = normalize_text(request.args.get("parent_asset_id"))
-        recognized_group_no = normalize_text(request.args.get("recognized_group_no"))
+        recognized_no = normalize_text(request.args.get("recognized_no")) or normalize_text(request.args.get("recognized_group_no"))
         parent_asset = Asset.query.get(int(parent_asset_id)) if parent_asset_id.isdigit() else None
 
-        default_group_no = recognized_group_no if device_type == "主设备" else ""
+        default_group_no = ""
         default_internal_no = ""
+        if device_type == "主设备" and recognized_no:
+            if is_group_no_value(recognized_no):
+                default_group_no = recognized_no
+            else:
+                default_internal_no = recognized_no
         if device_type == "配件" and parent_asset:
             default_group_no = make_accessory_prefix(parent_asset.group_no)
             default_internal_no = make_accessory_prefix(parent_asset.internal_no)
@@ -957,10 +1091,14 @@ def register_routes(app):
 
             if device_type == "主设备":
                 number_error = validate_required_number_pair(internal_no, group_no, "内部编号", "集团编号")
+                if not number_error:
+                    number_error = validate_asset_group_no(group_no, "集团编号")
             else:
                 number_error = validate_required_number_pair(internal_no, group_no, "附属资产内部编号", "附属资产集团编号")
                 if not number_error:
                     number_error = validate_accessory_no_format(internal_no, group_no)
+                if not number_error:
+                    number_error = validate_accessory_group_no(group_no, "附属资产集团编号")
 
             if number_error:
                 error = number_error
@@ -1075,6 +1213,8 @@ def register_routes(app):
                 delete_image_ids = request.form.getlist("delete_asset_image_ids")
 
                 number_error = validate_required_number_pair(internal_no, group_no, "内部编号", "集团编号")
+                if not number_error:
+                    number_error = validate_asset_group_no(group_no, "集团编号")
 
                 if number_error:
                     error = number_error
@@ -1174,6 +1314,8 @@ def register_routes(app):
             number_error = validate_required_number_pair(sub_internal_no, sub_group_no, "附属资产内部编号", "附属资产集团编号")
             if not number_error:
                 number_error = validate_accessory_no_format(sub_internal_no, sub_group_no)
+            if not number_error:
+                number_error = validate_accessory_group_no(sub_group_no, "附属资产集团编号")
 
             if number_error:
                 error = number_error
@@ -1394,7 +1536,7 @@ function confirmDeleteSelected(){
         <form method="get" action="/">
             <input type="hidden" name="searched" value="1">
             <div class="action-bar">
-                <input type="text" name="keyword" value="{{ keyword }}" placeholder="资产内部编号、集团编号或责任人">
+                <input type="text" name="keyword" value="{{ keyword }}" placeholder="编号/后6位、责任人">
                 <select name="status_filter">
                     <option value="">全部状态</option>
                     {% for s in statuses %}
@@ -1456,8 +1598,8 @@ function confirmDeleteSelected(){
                     <thead>
                         <tr>
                             <th><input type="checkbox" onclick="toggleSelectCurrentPage(this)" title="选取当前页"></th>
+                            <th>集团编号</th>
                             <th>内部编号</th>
-                            <th>集团资产编号</th>
                             <th>资产名称</th>
                             <th>型号</th>
                             <th>状态</th>
@@ -1469,8 +1611,8 @@ function confirmDeleteSelected(){
                         {% for item in rows %}
                         <tr>
                             <td><input type="checkbox" name="selected_items" value="{{ item.row_type }}:{{ item.id }}" data-row-type="{{ item.row_type }}" data-row-id="{{ item.id }}" data-parent-asset-id="{{ item.parent_asset_id }}" data-accessory-count="{{ item.accessory_count }}"></td>
-                            <td><a class="num-link" href="{{ item.detail_url }}">{{ item.internal_no }}</a></td>
                             <td><a class="num-link" href="{{ item.detail_url }}">{{ item.group_no }}</a></td>
+                            <td><a class="num-link" href="{{ item.detail_url }}">{{ item.internal_no }}</a></td>
                             <td>{{ item.name }}</td>
                             <td>{{ item.model }}</td>
                             <td>{{ item.status }}</td>
@@ -1529,7 +1671,264 @@ button{background:#0d6efd;color:#fff;border:none;}
 .scan-icon-wrap{display:flex;align-items:center;justify-content:center;margin-bottom:12px;}
 .scan-icon{width:64px;height:64px;border-radius:50%;background:#f0f2f5;display:flex;align-items:center;justify-content:center;color:#111827;}
 .scan-icon svg{width:34px;height:34px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;}
+.live-status{display:none;margin-bottom:12px;padding:10px 12px;border-radius:10px;font-size:14px;line-height:1.5;}
+.live-status.show{display:block;}
+.live-status.error{background:#fff1f0;border:1px solid #f5c2c0;color:#c62828;}
+.live-status.info{background:#eef6ff;border:1px solid #c9ddff;color:#114a8b;}
+.progress-wrap{display:none;margin-top:12px;}
+.progress-wrap.show{display:block;}
+.progress-bar-bg{width:100%;height:10px;background:#e9ecef;border-radius:999px;overflow:hidden;}
+.progress-bar-fill{width:0;height:100%;background:#0d6efd;transition:width .2s ease;}
+.progress-text{margin-top:8px;color:#555;font-size:14px;}
+.progress-time{margin-top:4px;color:#777;font-size:13px;}
 </style>
+<script>
+let scanController = null;
+let scanProgressTimer = null;
+let scanTimeoutTimer = null;
+let scanStartedAt = 0;
+let isScanning = false;
+const SCAN_TIMEOUT_SECONDS = {{ timeout_seconds|default(15) }};
+
+function setScanStatus(message, variant){
+    const box = document.getElementById('scan-live-status');
+    if(!box){
+        return;
+    }
+    if(!message){
+        box.textContent = '';
+        box.className = 'live-status';
+        return;
+    }
+    box.textContent = message;
+    box.className = 'live-status show ' + (variant || 'info');
+}
+
+function updateSelectedImageTip(){
+    const fileInput = document.getElementById('scan-image-input');
+    const tip = document.getElementById('scan-file-tip');
+    if(!tip || !fileInput){
+        return;
+    }
+    if(fileInput.files && fileInput.files.length > 0){
+        const fileName = fileInput.files[0].name || '已选择图片';
+        tip.textContent = '图片已选择：' + fileName;
+        tip.style.display = 'block';
+    }else{
+        tip.textContent = '';
+        tip.style.display = 'none';
+    }
+}
+
+function setScanButtons(scanning){
+    const submitBtn = document.getElementById('scan-submit-btn');
+    const backBtn = document.getElementById('scan-back-btn');
+    const fileInput = document.getElementById('scan-image-input');
+    if(submitBtn){
+        submitBtn.disabled = scanning;
+        submitBtn.textContent = scanning ? '识别中...' : (submitBtn.dataset.idleText || '识别');
+    }
+    if(backBtn){
+        backBtn.textContent = scanning ? '终止识别' : '返回';
+    }
+    if(fileInput){
+        fileInput.disabled = scanning;
+    }
+}
+
+function updateScanProgress(){
+    const wrap = document.getElementById('scan-progress-wrap');
+    const fill = document.getElementById('scan-progress-fill');
+    const text = document.getElementById('scan-progress-text');
+    const time = document.getElementById('scan-progress-time');
+    if(!wrap || !fill || !text || !time || !isScanning){
+        return;
+    }
+    const elapsedMs = Date.now() - scanStartedAt;
+    const elapsedSec = elapsedMs / 1000;
+    const ratio = Math.min(elapsedSec / SCAN_TIMEOUT_SECONDS, 1);
+    const percent = Math.min(95, Math.max(6, Math.round(ratio * 95)));
+    fill.style.width = percent + '%';
+
+    if(elapsedSec < 3){
+        text.textContent = '正在上传并读取图片...';
+    }else if(elapsedSec < 7){
+        text.textContent = '正在分析标签区域...';
+    }else if(elapsedSec < 11){
+        text.textContent = '正在识别资产编号...';
+    }else{
+        text.textContent = '正在整理识别结果...';
+    }
+    time.textContent = '已用时 ' + elapsedSec.toFixed(1) + ' 秒 / 最长 ' + SCAN_TIMEOUT_SECONDS + ' 秒';
+}
+
+function startScanProgress(){
+    const wrap = document.getElementById('scan-progress-wrap');
+    const fill = document.getElementById('scan-progress-fill');
+    if(wrap){
+        wrap.classList.add('show');
+    }
+    if(fill){
+        fill.style.width = '6%';
+    }
+    scanStartedAt = Date.now();
+    updateScanProgress();
+    scanProgressTimer = window.setInterval(updateScanProgress, 200);
+}
+
+function stopScanProgress(){
+    const wrap = document.getElementById('scan-progress-wrap');
+    const fill = document.getElementById('scan-progress-fill');
+    if(scanProgressTimer){
+        window.clearInterval(scanProgressTimer);
+        scanProgressTimer = null;
+    }
+    if(scanTimeoutTimer){
+        window.clearTimeout(scanTimeoutTimer);
+        scanTimeoutTimer = null;
+    }
+    if(wrap){
+        wrap.classList.remove('show');
+    }
+    if(fill){
+        fill.style.width = '0%';
+    }
+}
+
+function finishScanUi(){
+    isScanning = false;
+    scanController = null;
+    stopScanProgress();
+    setScanButtons(false);
+}
+
+function resetScanPage(){
+    try {
+        const form = document.getElementById('scan-form');
+        const fileInput = document.getElementById('scan-image-input');
+        const tip = document.getElementById('scan-file-tip');
+        const liveStatus = document.getElementById('scan-live-status');
+        if(form){
+            form.reset();
+        }
+        if(fileInput){
+            fileInput.value = '';
+        }
+        if(tip){
+            tip.textContent = '';
+            tip.style.display = 'none';
+        }
+        if(liveStatus){
+            liveStatus.textContent = '';
+            liveStatus.className = 'live-status';
+        }
+        finishScanUi();
+    } catch (e) {}
+    window.location.replace('/scan_label?_reset=' + Date.now());
+}
+
+function triggerSubmitScan(event){
+    submitScanForm(event);
+    return false;
+}
+
+async function submitScanForm(event){
+    event.preventDefault();
+    if(isScanning){
+        return false;
+    }
+
+    const submitBtn = document.getElementById('scan-submit-btn');
+    if(submitBtn && submitBtn.dataset.mode === 'reset'){
+        resetScanPage();
+        return false;
+    }
+
+    const form = document.getElementById('scan-form');
+    const fileInput = document.getElementById('scan-image-input');
+    if(!fileInput || !fileInput.files || fileInput.files.length === 0){
+        setScanStatus('请先拍照或上传标签图片', 'error');
+        return false;
+    }
+
+    const formData = new FormData(form);
+
+    isScanning = true;
+    setScanStatus('已开始识别，请稍候...', 'info');
+    setScanButtons(true);
+    startScanProgress();
+
+    scanController = new AbortController();
+    scanTimeoutTimer = window.setTimeout(() => {
+        if(scanController){
+            scanController.abort();
+            setScanStatus('15秒内未识别成功，已自动终止本次识别。', 'error');
+        }
+    }, SCAN_TIMEOUT_SECONDS * 1000);
+
+    try {
+        const response = await fetch(form.action || window.location.pathname, {
+            method: 'POST',
+            body: formData,
+            headers: {'X-Requested-With': 'XMLHttpRequest'},
+            signal: scanController.signal,
+            cache: 'no-store'
+        });
+
+        const contentType = response.headers.get('content-type') || '';
+        if(contentType.indexOf('application/json') >= 0){
+            const data = await response.json();
+            if(data && data.html){
+                document.open();
+                document.write(data.html);
+                document.close();
+                return false;
+            }
+        }
+
+        const html = await response.text();
+        document.open();
+        document.write(html);
+        document.close();
+        return false;
+    } catch (error) {
+        if(error && error.name === 'AbortError'){
+            if(!document.getElementById('scan-live-status').textContent){
+                setScanStatus('已终止本次识别。', 'error');
+            }
+        }else{
+            setScanStatus('识别失败：' + ((error && error.message) ? error.message : '网络异常'), 'error');
+        }
+    } finally {
+        finishScanUi();
+    }
+    return false;
+}
+
+function handleBackOrStop(){
+    if(isScanning && scanController){
+        scanController.abort();
+        setScanStatus('已手动终止本次识别。', 'error');
+        return;
+    }
+    try {
+        const form = document.getElementById('scan-form');
+        if(form){ form.reset(); }
+    } catch (e) {}
+    window.location.replace('/?_back=' + Date.now());
+}
+
+function initScanPage(){
+    updateSelectedImageTip();
+    setScanButtons(false);
+    const submitBtn = document.getElementById('scan-submit-btn');
+    if(submitBtn && submitBtn.dataset.mode === 'reset'){
+        setScanStatus('当前为识别结果页，如需继续识别，请先点击“重置”。', 'info');
+    }
+}
+
+initScanPage();
+</script>
 </head>
 <body>
 <div class="wrap">
@@ -1547,18 +1946,24 @@ button{background:#0d6efd;color:#fff;border:none;}
                 </svg>
             </div>
         </div>
-        <h2 style="text-align:center;margin-top:0;">拍照识别集团资产编号</h2>
-        <div class="muted" style="margin-bottom:12px;">只识别以 308 开头的 18 位集团资产编号。建议尽量只拍一张标签，并让“附设备号”这一行占画面更大一些。</div>
+        <h2 style="text-align:center;margin-top:0;">拍照识别资产编号</h2>
+        <div id="scan-live-status" class="live-status"></div>
         {% if error %}<div class="err">{{ error }}</div>{% endif %}
 
-        <form method="post" enctype="multipart/form-data">
+        <form id="scan-form" method="post" enctype="multipart/form-data" autocomplete="off" onsubmit="return triggerSubmitScan(event)">
             <div class="row">
                 <label>拍照或上传标签图片</label>
-                <input type="file" name="scan_image" accept="image/*" capture="environment" required>
+                <input id="scan-image-input" type="file" name="scan_image" accept="image/*" capture="environment" required onchange="updateSelectedImageTip(); setScanStatus('', 'info');">
+                <div id="scan-file-tip" class="muted" style="display:none;margin-top:6px;"></div>
+            </div>
+            <div id="scan-progress-wrap" class="progress-wrap">
+                <div class="progress-bar-bg"><div id="scan-progress-fill" class="progress-bar-fill"></div></div>
+                <div id="scan-progress-text" class="progress-text">准备开始识别...</div>
+                <div id="scan-progress-time" class="progress-time"></div>
             </div>
             <div class="action-row">
-                <button type="submit">开始识别</button>
-                <a href="/"><button type="button" class="btn-gray">返回</button></a>
+                <button id="scan-submit-btn" type="{{ 'button' if recognized_no else 'submit' }}" data-mode="{{ 'reset' if recognized_no else 'scan' }}" data-idle-text="{{ '重置' if recognized_no else '识别' }}" {% if recognized_no %}onclick="resetScanPage(); return false;"{% endif %}>{{ '重置' if recognized_no else '识别' }}</button>
+                <button id="scan-back-btn" type="button" class="btn-gray" onclick="handleBackOrStop(); return false;">返回</button>
             </div>
         </form>
     </div>
@@ -1567,7 +1972,7 @@ button{background:#0d6efd;color:#fff;border:none;}
     <div class="card">
         <div class="msg">识别成功</div>
         <div class="row">
-            <label>识别结果（集团资产编号）</label>
+            <label>识别结果（{{ recognized_label }}）</label>
             <div class="result-box">{{ recognized_no }}</div>
         </div>
 
@@ -1582,9 +1987,9 @@ button{background:#0d6efd;color:#fff;border:none;}
         {% else %}
         <div class="row">
             <label>匹配结果</label>
-            <div class="muted">当前系统中未找到该集团资产编号，可直接新建设备并自动带入该编号。</div>
+            <div class="muted">当前系统中未找到该{{ recognized_label }}对应的设备，可直接新建设备并自动带入该编号。</div>
             <div class="action-row">
-                <a href="/device/new?type=主设备&recognized_group_no={{ recognized_no }}"><button type="button" class="btn-green">新增主设备</button></a>
+                <a href="/device/new?type=主设备&recognized_no={{ recognized_no }}"><button type="button" class="btn-green">新增主设备</button></a>
             </div>
         </div>
         {% endif %}
@@ -1606,7 +2011,8 @@ button{background:#0d6efd;color:#fff;border:none;}
     <div class="card">
         <div class="row">
             <label>识别调试信息</label>
-            <div class="debug-box">{{ debug_texts|join('\n') }}</div>
+            <div class="debug-box">{{ debug_texts|join('
+') }}</div>
         </div>
     </div>
     {% endif %}
@@ -1650,6 +2056,33 @@ button{background:#0d6efd;color:#fff;border:none;}
 </style>
 <script>
 let activeImageInputId = '';
+
+function validateAssetGroupNoValue(value){
+    value = (value || '').trim();
+    if(!value){
+        return '';
+    }
+    return /^\\d{18}$/.test(value) ? '' : '集团编号必须为18位数字';
+}
+
+function validateAccessoryGroupNoValue(value){
+    value = (value || '').trim();
+    if(!value){
+        return '';
+    }
+    return /^\\d{18}-\\d+$/.test(value) ? '' : '附属资产集团编号必须为18位主编号-序号';
+}
+
+function confirmDeviceSave(form){
+    const deviceType = (form.querySelector('[name="device_type"]') || {}).value || '主设备';
+    const groupNo = ((form.querySelector('[name="group_no"]') || {}).value || '').trim();
+    const message = deviceType === '配件' ? validateAccessoryGroupNoValue(groupNo) : validateAssetGroupNoValue(groupNo);
+    if(message){
+        alert(message);
+        return false;
+    }
+    return confirm('确认保存吗？');
+}
 
 function toggleType(){
     const type = document.getElementById('device_type').value;
@@ -1812,6 +2245,24 @@ th{background:#f0f3f8;}
 @media (max-width:768px){.grid{grid-template-columns:1fr;}}
 </style>
 <script>
+function validateAssetGroupNoValue(value){
+    value = (value || '').trim();
+    if(!value){
+        return '';
+    }
+    return /^\\d{18}$/.test(value) ? '' : '集团编号必须为18位数字';
+}
+
+function confirmAssetSave(form){
+    const groupNo = ((form.querySelector('[name="group_no"]') || {}).value || '').trim();
+    const message = validateAssetGroupNoValue(groupNo);
+    if(message){
+        alert(message);
+        return false;
+    }
+    return confirm('确认保存吗？');
+}
+
 function enableEdit(formId){
     const form = document.getElementById(formId);
     const fields = form.querySelectorAll('.edit-field');
@@ -1874,7 +2325,7 @@ function updateSelectedFiles(inputId, textId, dialogId){
         {% if message %}<div class="msg">{{ message }}</div>{% endif %}
         {% if error %}<div class="err">{{ error }}</div>{% endif %}
 
-        <form id="asset-form" method="post" enctype="multipart/form-data">
+        <form id="asset-form" method="post" enctype="multipart/form-data" onsubmit="return confirmAssetSave(this)">
             <input type="hidden" name="action" value="save_asset">
             <div class="grid">
                 <div class="row"><label>集团编号</label><input class="edit-field readonly" disabled type="text" name="group_no" value="{{ asset.group_no or '' }}"></div>
@@ -2026,6 +2477,24 @@ button{background:#0d6efd;color:#fff;border:none;}
 @media (max-width:768px){.grid{grid-template-columns:1fr;}}
 </style>
 <script>
+function validateAccessoryGroupNoValue(value){
+    value = (value || '').trim();
+    if(!value){
+        return '';
+    }
+    return /^\\d{18}-\\d+$/.test(value) ? '' : '附属资产集团编号必须为18位主编号-序号';
+}
+
+function confirmAccessorySave(form){
+    const groupNo = ((form.querySelector('[name="sub_group_no"]') || {}).value || '').trim();
+    const message = validateAccessoryGroupNoValue(groupNo);
+    if(message){
+        alert(message);
+        return false;
+    }
+    return confirm('确认保存吗？');
+}
+
 function enableEdit(formId){
     const form = document.getElementById(formId);
     const fields = form.querySelectorAll('.edit-field');
@@ -2088,7 +2557,7 @@ function updateSelectedFiles(inputId, textId, dialogId){
         {% if message %}<div class="msg">{{ message }}</div>{% endif %}
         {% if error %}<div class="err">{{ error }}</div>{% endif %}
 
-        <form id="accessory-form" method="post" enctype="multipart/form-data">
+        <form id="accessory-form" method="post" enctype="multipart/form-data" onsubmit="return confirmAccessorySave(this)">
             <div class="grid">
                 <div class="row"><label>附属资产内部编号</label><input class="edit-field readonly" disabled type="text" name="sub_internal_no" value="{{ accessory.sub_internal_no or '' }}"></div>
                 <div class="row"><label>附属资产集团编号</label><input class="edit-field readonly" disabled type="text" name="sub_group_no" value="{{ accessory.sub_group_no or '' }}"></div>
