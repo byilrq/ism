@@ -20,6 +20,7 @@ RUN_URL="${RAW_BASE}/run.py"
 REQ_URL="${RAW_BASE}/requirements.txt"
 SQL_URL="${RAW_BASE}/asset_manager.sql"
 ROUTES_INIT_URL="${RAW_BASE}/__init__.py"
+OCR_URL="${RAW_BASE}/ocr_recognizer.py"
 
 TMP_DIR="/tmp/asset_manager_install"
 DB_NAME="asset_manager"
@@ -211,12 +212,15 @@ download_files() {
     info "下载项目文件"
     rm -rf "$TMP_DIR"
     mkdir -p "$TMP_DIR"
+
     curl -L --fail --retry 3 -o "$TMP_DIR/app.zip" "$APP_ZIP_URL"
     curl -L --fail --retry 3 -o "$TMP_DIR/config.py" "$CONFIG_URL"
     curl -L --fail --retry 3 -o "$TMP_DIR/run.py" "$RUN_URL"
     curl -L --fail --retry 3 -o "$TMP_DIR/requirements.txt" "$REQ_URL"
     curl -L --fail --retry 3 -o "$TMP_DIR/asset_manager.sql" "$SQL_URL"
     curl -L --fail --retry 3 -o "$TMP_DIR/routes___init__.py" "$ROUTES_INIT_URL"
+    curl -L --fail --retry 3 -o "$TMP_DIR/ocr_recognizer.py" "$OCR_URL"
+
     ok "项目文件下载完成"
 }
 
@@ -249,7 +253,7 @@ deploy_files() {
 }
 
 sync_custom_files() {
-    info "同步你维护的两个核心文件：routes/__init__.py 和 asset_manager.sql"
+    info "同步你维护的三个核心文件：routes/__init__.py、routes/ocr_recognizer.py 和 asset_manager.sql"
 
     mkdir -p "${APP_DIR}/routes"
 
@@ -260,6 +264,13 @@ sync_custom_files() {
         return 1
     fi
 
+    if [ -f "$TMP_DIR/ocr_recognizer.py" ]; then
+        cp -f "$TMP_DIR/ocr_recognizer.py" "${APP_DIR}/routes/ocr_recognizer.py"
+    else
+        err "未找到 $TMP_DIR/ocr_recognizer.py"
+        return 1
+    fi
+
     if [ -f "$TMP_DIR/asset_manager.sql" ]; then
         cp -f "$TMP_DIR/asset_manager.sql" "$APP_ROOT/asset_manager.sql"
     else
@@ -267,7 +278,7 @@ sync_custom_files() {
         return 1
     fi
 
-    ok "已覆盖 routes/__init__.py 和 asset_manager.sql"
+    ok "已覆盖 routes/__init__.py、routes/ocr_recognizer.py 和 asset_manager.sql"
 }
 
 setup_python_env() {
@@ -795,9 +806,10 @@ install_asset_system() {
     echo "内部 Gunicorn 端口：127.0.0.1:${INTERNAL_PORT}"
     echo "外部 Nginx 端口：${PUBLIC_PORT}"
     echo "当前默认图片目录（未接云前）：${ASSET_IMG_DIR} 和 ${ACCESSORY_IMG_DIR}"
-    echo "本次安装最后已固定覆盖两个核心文件："
+    echo "本次安装最后已固定覆盖三个核心文件："
     echo "1) ${APP_DIR}/routes/__init__.py"
-    echo "2) ${APP_ROOT}/asset_manager.sql"
+    echo "2) ${APP_DIR}/routes/ocr_recognizer.py"
+    echo "3) ${APP_ROOT}/asset_manager.sql"
     echo "建议下一步顺序：4. 安装 WebDAV -> 5. WebDAV 连通性检测 -> 6. 设置cron备份数据库"
 }
 
