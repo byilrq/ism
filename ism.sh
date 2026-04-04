@@ -36,14 +36,12 @@ ACCESSORY_IMG_DIR="${APP_ROOT}/app/uploads/images/accessories"
 LOCAL_UPLOAD_ROOT="${APP_ROOT}/app/uploads/images"
 
 DOMAIN=""
-OPENLIST_URL="http://127.0.0.1:5244"
-OPENLIST_DAV_URL="${OPENLIST_URL}/dav/"
-OPENLIST_DAV_MOUNT="/mnt/openlist_dav"
-OPENLIST_REMOTE_DIR="asset_manager_images"
-OPENLIST_UPLOAD_ROOT="${OPENLIST_DAV_MOUNT}/${OPENLIST_REMOTE_DIR}"
-OPENLIST_DAV_USER="assetdav"
-OPENLIST_DAV_PASS=""
-OPENLIST_ADMIN_PASS=""
+INFINICLOUD_DAV_URL=""
+INFINICLOUD_DAV_MOUNT="/mnt/infinicloud_dav"
+INFINICLOUD_REMOTE_ROOT="ism_images"
+INFINICLOUD_UPLOAD_ROOT="${INFINICLOUD_DAV_MOUNT}/${INFINICLOUD_REMOTE_ROOT}"
+INFINICLOUD_DAV_USER=""
+INFINICLOUD_DAV_PASS=""
 
 OPENLIST_MOUNT_SERVICE="/etc/systemd/system/openlist-webdav.service"
 
@@ -58,10 +56,10 @@ BLUE='\033[94m'
 MAGENTA='\033[95m'
 WHITE='\033[97m'
 
-green() { printf '\033[92m%s\033[0m\n' "$*"; }
-yellow() { printf '\033[93m%s\033[0m\n' "$*"; }
-red() { printf '\033[91m%s\033[0m\n' "$*"; }
-cyan() { printf '\033[96m%s\033[0m\n' "$*"; }
+green() { printf '\033[32m%s\033[0m\n' "$*"; }
+yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
+red() { printf '\033[31m%s\033[0m\n' "$*"; }
+cyan() { printf '\033[36m%s\033[0m\n' "$*"; }
 
 info() { cyan "[INFO] $*"; }
 ok() { green "[OK] $*"; }
@@ -70,7 +68,7 @@ err() { red "[ERR] $*"; }
 
 require_root() {
     if [ "$(id -u)" -ne 0 ]; then
-        err "请使用 root 运行：sudo ./ism_openlist.sh"
+        err "请使用 root 运行：sudo ./ism_infinicloud.sh"
         exit 1
     fi
 }
@@ -85,26 +83,41 @@ load_state() {
 save_state() {
     cat > "$STATE_FILE" <<EOF_STATE
 DOMAIN=${DOMAIN@Q}
-OPENLIST_URL=${OPENLIST_URL@Q}
-OPENLIST_DAV_URL=${OPENLIST_DAV_URL@Q}
-OPENLIST_DAV_MOUNT=${OPENLIST_DAV_MOUNT@Q}
-OPENLIST_REMOTE_DIR=${OPENLIST_REMOTE_DIR@Q}
-OPENLIST_UPLOAD_ROOT=${OPENLIST_UPLOAD_ROOT@Q}
-OPENLIST_DAV_USER=${OPENLIST_DAV_USER@Q}
-OPENLIST_DAV_PASS=${OPENLIST_DAV_PASS@Q}
-OPENLIST_ADMIN_PASS=${OPENLIST_ADMIN_PASS@Q}
+INFINICLOUD_DAV_URL=${INFINICLOUD_DAV_URL@Q}
+INFINICLOUD_DAV_MOUNT=${INFINICLOUD_DAV_MOUNT@Q}
+INFINICLOUD_REMOTE_ROOT=${INFINICLOUD_REMOTE_ROOT@Q}
+INFINICLOUD_UPLOAD_ROOT=${INFINICLOUD_UPLOAD_ROOT@Q}
+INFINICLOUD_DAV_USER=${INFINICLOUD_DAV_USER@Q}
+INFINICLOUD_DAV_PASS=${INFINICLOUD_DAV_PASS@Q}
 EOF_STATE
 }
 
+recompute_infinicloud_paths() {
+    INFINICLOUD_DAV_URL="${INFINICLOUD_DAV_URL%/}/"
+    INFINICLOUD_DAV_MOUNT="${INFINICLOUD_DAV_MOUNT%/}"
+    [ -n "$INFINICLOUD_DAV_MOUNT" ] || INFINICLOUD_DAV_MOUNT="/mnt/infinicloud_dav"
+    INFINICLOUD_REMOTE_ROOT="${INFINICLOUD_REMOTE_ROOT#/}"
+    INFINICLOUD_REMOTE_ROOT="${INFINICLOUD_REMOTE_ROOT%/}"
+    [ -n "$INFINICLOUD_REMOTE_ROOT" ] || INFINICLOUD_REMOTE_ROOT="ism_images"
+    INFINICLOUD_UPLOAD_ROOT="${INFINICLOUD_DAV_MOUNT}/${INFINICLOUD_REMOTE_ROOT}"
+}
+
 ensure_state_defaults() {
-    : "${OPENLIST_URL:=http://127.0.0.1:5244}"
-    : "${OPENLIST_DAV_URL:=${OPENLIST_URL}/dav/}"
-    : "${OPENLIST_DAV_MOUNT:=/mnt/openlist_dav}"
-    : "${OPENLIST_REMOTE_DIR:=asset_manager_images}"
-    : "${OPENLIST_UPLOAD_ROOT:=${OPENLIST_DAV_MOUNT}/${OPENLIST_REMOTE_DIR}}"
-    : "${OPENLIST_DAV_USER:=assetdav}"
-    : "${OPENLIST_DAV_PASS:=}"
-    : "${OPENLIST_ADMIN_PASS:=}"
+    : "${INFINICLOUD_DAV_URL:=}"
+    : "${INFINICLOUD_DAV_MOUNT:=/mnt/infinicloud_dav}"
+    : "${INFINICLOUD_REMOTE_ROOT:=ism_images}"
+    : "${INFINICLOUD_DAV_USER:=}"
+    : "${INFINICLOUD_DAV_PASS:=}"
+    if [ -n "$INFINICLOUD_DAV_URL" ]; then
+        recompute_infinicloud_paths
+    else
+        INFINICLOUD_DAV_MOUNT="${INFINICLOUD_DAV_MOUNT%/}"
+        [ -n "$INFINICLOUD_DAV_MOUNT" ] || INFINICLOUD_DAV_MOUNT="/mnt/infinicloud_dav"
+        INFINICLOUD_REMOTE_ROOT="${INFINICLOUD_REMOTE_ROOT#/}"
+        INFINICLOUD_REMOTE_ROOT="${INFINICLOUD_REMOTE_ROOT%/}"
+        [ -n "$INFINICLOUD_REMOTE_ROOT" ] || INFINICLOUD_REMOTE_ROOT="ism_images"
+        INFINICLOUD_UPLOAD_ROOT="${INFINICLOUD_DAV_MOUNT}/${INFINICLOUD_REMOTE_ROOT}"
+    fi
 }
 
 wait_for_port() {
@@ -118,10 +131,6 @@ wait_for_port() {
         sleep 1
     done
     return 1
-}
-
-print_section() {
-    printf "\n${BOLD}${BLUE}== %s ==${NC}\n" "$1"
 }
 
 patch_config_upload_folder() {
@@ -161,12 +170,14 @@ venv = sys.argv[2]
 port = sys.argv[3]
 workers = sys.argv[4]
 text = svc.read_text(encoding='utf-8')
-text = re.sub(r'^After=.*$', 'After=network-online.target mariadb.service openlist.service openlist-webdav.service', text, flags=re.MULTILINE)
+text = re.sub(r'^After=.*$', 'After=network-online.target mariadb.service infinicloud-webdav.service', text, flags=re.MULTILINE)
 text = re.sub(r'^Wants=.*$', 'Wants=network-online.target', text, flags=re.MULTILINE)
 if 'Wants=network-online.target' not in text:
-    text = text.replace('After=network-online.target mariadb.service openlist.service openlist-webdav.service\n', 'After=network-online.target mariadb.service openlist.service openlist-webdav.service\nWants=network-online.target\n', 1)
-if 'Requires=openlist-webdav.service' not in text:
-    text = text.replace('[Service]\n', 'Requires=openlist-webdav.service\n\n[Service]\n', 1)
+    text = text.replace('After=network-online.target mariadb.service infinicloud-webdav.service\n', 'After=network-online.target mariadb.service infinicloud-webdav.service\nWants=network-online.target\n', 1)
+text = re.sub(r'^Requires=.*$', '', text, flags=re.MULTILINE)
+if 'Requires=infinicloud-webdav.service' not in text:
+    text = text.replace('[Service]\n', 'Requires=infinicloud-webdav.service\n\n[Service]\n', 1)
+text = re.sub(r'\n{3,}', '\n\n', text)
 exec_line = f'ExecStart={venv}/bin/gunicorn --workers {workers} --bind 127.0.0.1:{port} run:app'
 text = re.sub(r'^ExecStart=.*$', exec_line, text, flags=re.MULTILINE)
 svc.write_text(text, encoding='utf-8')
@@ -175,183 +186,6 @@ PY
 
     systemctl daemon-reload
     ok "asset_manager systemd 已切换为 WebDAV 依赖，并将 gunicorn workers 调整为 ${GUNICORN_WORKERS}"
-}
-
-install_openlist() {
-    load_state
-    ensure_state_defaults
-
-    info "安装 OpenList 官方 APT 仓库"
-    apt-get update
-    apt-get install -y curl ca-certificates gnupg
-    curl -fsSL https://github.com/OpenListTeam/OpenList-APT/releases/latest/download/install-apt.sh | bash
-
-    info "安装 OpenList"
-    apt-get update
-    apt-get install -y openlist
-
-    systemctl enable --now openlist
-    systemctl status openlist --no-pager || true
-
-    read -r -p "请输入要设置的 OpenList 管理员密码（可留空稍后手工设置）: " input_admin_pass
-    if [ -n "${input_admin_pass:-}" ]; then
-        OPENLIST_ADMIN_PASS="$input_admin_pass"
-        if command -v openlist >/dev/null 2>&1; then
-            openlist admin set "$OPENLIST_ADMIN_PASS" || true
-            systemctl restart openlist || true
-        fi
-    fi
-
-    save_state
-
-    ok "OpenList 已安装"
-    echo "后台地址：${OPENLIST_URL}"
-    echo "WebDAV 地址：${OPENLIST_DAV_URL}"
-    echo "请登录 OpenList 后台，新增天翼云盘客户端或天翼云盘TV存储，并在根目录下创建 ${OPENLIST_REMOTE_DIR}/assets 和 ${OPENLIST_REMOTE_DIR}/accessories"
-}
-
-write_openlist_mount_service() {
-    cat > "$OPENLIST_MOUNT_SERVICE" <<EOF_SYSTEMD
-[Unit]
-Description=Mount OpenList WebDAV
-After=network-online.target openlist.service
-Wants=network-online.target
-Requires=openlist.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStartPre=/bin/mkdir -p ${OPENLIST_DAV_MOUNT}
-ExecStart=/usr/bin/mount -t davfs ${OPENLIST_DAV_URL} ${OPENLIST_DAV_MOUNT}
-ExecStop=/bin/umount -l ${OPENLIST_DAV_MOUNT}
-TimeoutStartSec=60
-
-[Install]
-WantedBy=multi-user.target
-EOF_SYSTEMD
-}
-
-install_openlist_webdav() {
-    load_state
-    ensure_state_defaults
-
-    echo "OpenList WebDAV 接入说明："
-    echo "1) OpenList 服务地址默认：${OPENLIST_URL}"
-    echo "2) WebDAV 地址默认：${OPENLIST_DAV_URL}"
-    echo "3) 本机挂载目录默认：${OPENLIST_DAV_MOUNT}"
-    echo "4) 程序图片目录默认：${OPENLIST_UPLOAD_ROOT}"
-    echo "5) 程序会在该目录下使用 assets / accessories 两个子目录"
-    echo "6) 这里的账号密码请填写你在 OpenList 后台新建的普通 WebDAV 用户"
-    echo
-
-    read -r -p "请输入 OpenList WebDAV 用户名 [${OPENLIST_DAV_USER}]: " input_user
-    read -r -p "请输入 OpenList WebDAV 密码: " input_pass
-    echo
-
-    if [ -n "${input_user:-}" ]; then OPENLIST_DAV_USER="$input_user"; fi
-    if [ -n "${input_pass:-}" ]; then OPENLIST_DAV_PASS="$input_pass"; fi
-
-    if [ -z "$OPENLIST_DAV_USER" ] || [ -z "$OPENLIST_DAV_PASS" ]; then
-        err "OpenList WebDAV 用户名和密码不能为空"
-        return 1
-    fi
-
-    info "安装 WebDAV 依赖"
-    apt-get update
-    apt-get install -y davfs2
-
-    mkdir -p "$OPENLIST_DAV_MOUNT"
-
-    info "写入 /etc/davfs2/davfs2.conf"
-    python3 - "$OPENLIST_DAV_MOUNT" <<'PY'
-from pathlib import Path
-import sys, re
-mount_path = sys.argv[1]
-p = Path('/etc/davfs2/davfs2.conf')
-text = p.read_text(encoding='utf-8') if p.exists() else ''
-block = f'[{mount_path}]\nuse_locks 0\nbuf_size 64\n'
-pattern = re.compile(rf'^\[{re.escape(mount_path)}\]\n(?:.*\n)*?(?=^\[|\Z)', re.MULTILINE)
-if pattern.search(text):
-    text = pattern.sub(block, text).rstrip() + '\n'
-else:
-    if text and not text.endswith('\n'):
-        text += '\n'
-    text += '\n' + block
-p.write_text(text, encoding='utf-8')
-PY
-
-    info "写入 /etc/davfs2/secrets"
-    python3 - "$OPENLIST_DAV_MOUNT" "$OPENLIST_DAV_USER" "$OPENLIST_DAV_PASS" <<'PY'
-from pathlib import Path
-import sys
-mount_path, user, passwd = sys.argv[1:4]
-p = Path('/etc/davfs2/secrets')
-lines = p.read_text(encoding='utf-8').splitlines() if p.exists() else []
-lines = [line for line in lines if not line.startswith(mount_path + ' ')]
-lines.append(f'{mount_path} {user} {passwd}')
-p.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-PY
-    chmod 600 /etc/davfs2/secrets
-
-    info "写入 openlist-webdav.service"
-    write_openlist_mount_service
-    systemctl daemon-reload
-
-    info "重新挂载 OpenList WebDAV"
-    systemctl stop openlist-webdav.service >/dev/null 2>&1 || true
-    umount "$OPENLIST_DAV_MOUNT" >/dev/null 2>&1 || umount -l "$OPENLIST_DAV_MOUNT" >/dev/null 2>&1 || true
-    rm -f "/var/run/mount.davfs/$(echo "$OPENLIST_DAV_MOUNT" | sed 's#/#-#g' | sed 's/^-//').pid"
-    systemctl enable --now openlist-webdav.service
-
-    info "测试 OpenList WebDAV 目录读写并创建程序目录"
-    ls -lah "$OPENLIST_DAV_MOUNT"
-    mkdir -p "$OPENLIST_UPLOAD_ROOT"
-    mkdir -p "$OPENLIST_UPLOAD_ROOT/assets"
-    mkdir -p "$OPENLIST_UPLOAD_ROOT/accessories"
-    touch "$OPENLIST_UPLOAD_ROOT/test_write.txt"
-
-    info "修改程序图片保存目录"
-    if [ -f "${APP_ROOT}/config.py" ]; then
-        cp -f "${APP_ROOT}/config.py" "${APP_ROOT}/config.py.bak_openlist_$(date +%Y%m%d_%H%M%S)"
-        patch_config_upload_folder "$OPENLIST_UPLOAD_ROOT"
-    else
-        warn "未发现 ${APP_ROOT}/config.py，跳过程序配置修改"
-    fi
-
-    patch_systemd_workers_and_dependencies
-    save_state
-
-    if systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
-        systemctl restart "$SERVICE_NAME"
-    fi
-
-    ok "OpenList WebDAV 已安装并接入程序"
-    echo "当前 WebDAV 挂载点：$OPENLIST_DAV_MOUNT"
-    echo "当前 WebDAV 地址：$OPENLIST_DAV_URL"
-    echo "当前程序图片目录：$OPENLIST_UPLOAD_ROOT"
-    echo "当前 OpenList 远端目录：${OPENLIST_REMOTE_DIR}（其下会使用 assets / accessories）"
-}
-
-check_openlist_webdav_connectivity() {
-    load_state
-    ensure_state_defaults
-
-    if [ -z "$OPENLIST_DAV_MOUNT" ] || [ -z "$OPENLIST_DAV_URL" ]; then
-        err "未找到 OpenList WebDAV 配置，请先执行“安装 WebDAV”"
-        return 1
-    fi
-
-    info "检测 OpenList WebDAV 连通性"
-    mkdir -p "$OPENLIST_DAV_MOUNT"
-    systemctl stop openlist-webdav.service >/dev/null 2>&1 || true
-    umount "$OPENLIST_DAV_MOUNT" >/dev/null 2>&1 || umount -l "$OPENLIST_DAV_MOUNT" >/dev/null 2>&1 || true
-    rm -f "/var/run/mount.davfs/$(echo "$OPENLIST_DAV_MOUNT" | sed 's#/#-#g' | sed 's/^-//').pid"
-    systemctl start openlist-webdav.service
-
-    ls -lah "$OPENLIST_DAV_MOUNT"
-    mkdir -p "$OPENLIST_UPLOAD_ROOT/assets" "$OPENLIST_UPLOAD_ROOT/accessories"
-    touch "$OPENLIST_UPLOAD_ROOT/.openlist_probe_$(date +%Y%m%d_%H%M%S)"
-    ok "OpenList WebDAV 连通性检测通过"
 }
 
 install_packages() {
@@ -388,27 +222,10 @@ download_files() {
 
 deploy_files() {
     info "部署应用文件"
-
     if [ -d "$APP_ROOT" ] && [ -n "$(find "$APP_ROOT" -mindepth 1 -maxdepth 1 2>/dev/null)" ]; then
-        echo
-        warn "检测到已有安装目录：$APP_ROOT"
-        read -r -p "是否先备份当前目录再继续安装？(Y/N): " backup_choice
-
-        case "${backup_choice:-N}" in
-            Y|y)
-                ts="$(date +%Y%m%d_%H%M%S)"
-                mv "$APP_ROOT" "${APP_ROOT}.bak.${ts}"
-                warn "已备份为 ${APP_ROOT}.bak.${ts}"
-                ;;
-            N|n)
-                warn "你选择不备份，已取消本次安装"
-                return 1
-                ;;
-            *)
-                warn "输入无效，默认取消本次安装"
-                return 1
-                ;;
-        esac
+        ts="$(date +%Y%m%d_%H%M%S)"
+        mv "$APP_ROOT" "${APP_ROOT}.bak.${ts}"
+        warn "检测到已有 ${APP_ROOT}，已备份为 ${APP_ROOT}.bak.${ts}"
     fi
 
     mkdir -p "$APP_ROOT" "$APP_DIR" "$ASSET_IMG_DIR" "$ACCESSORY_IMG_DIR" "$BACKUP_DIR"
@@ -594,6 +411,244 @@ configure_nginx() {
     fi
 }
 
+write_webdav_mount_service() {
+    cat > "$WEBDAV_MOUNT_SERVICE" <<EOF_SYSTEMD
+[Unit]
+Description=Mount InfiniCLOUD WebDAV
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/mkdir -p ${INFINICLOUD_DAV_MOUNT}
+ExecStart=/usr/bin/mount -t davfs ${INFINICLOUD_DAV_URL} ${INFINICLOUD_DAV_MOUNT}
+ExecStop=/bin/umount -l ${INFINICLOUD_DAV_MOUNT}
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target
+EOF_SYSTEMD
+}
+
+write_davfs_mount_config() {
+    info "写入 /etc/davfs2/davfs2.conf"
+    python3 - "$INFINICLOUD_DAV_MOUNT" <<'PY'
+from pathlib import Path
+import sys, re
+mount_path = sys.argv[1]
+p = Path('/etc/davfs2/davfs2.conf')
+text = p.read_text(encoding='utf-8') if p.exists() else ''
+block = f'[{mount_path}]\nuse_locks 0\nbuf_size 64\n'
+pattern = re.compile(rf'^\[{re.escape(mount_path)}\]\n(?:.*\n)*?(?=^\[|\Z)', re.MULTILINE)
+if pattern.search(text):
+    text = pattern.sub(block, text).rstrip() + '\n'
+else:
+    if text and not text.endswith('\n'):
+        text += '\n'
+    text += '\n' + block
+p.write_text(text, encoding='utf-8')
+PY
+}
+
+write_davfs_secrets_entry() {
+    info "写入 /etc/davfs2/secrets"
+    python3 - "$INFINICLOUD_DAV_MOUNT" "$INFINICLOUD_DAV_USER" "$INFINICLOUD_DAV_PASS" <<'PY'
+from pathlib import Path
+import sys
+mount_path, user, passwd = sys.argv[1:4]
+p = Path('/etc/davfs2/secrets')
+lines = p.read_text(encoding='utf-8').splitlines() if p.exists() else []
+lines = [line for line in lines if not line.startswith(mount_path + ' ')]
+lines.append(f'{mount_path} {user} {passwd}')
+p.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+PY
+    chmod 600 /etc/davfs2/secrets
+}
+
+apply_webdav_settings() {
+    local mode="$1"
+
+    if [ "$mode" = "install" ]; then
+        info "安装 WebDAV 依赖"
+        apt-get update
+        apt-get install -y davfs2
+    else
+        if ! command -v mount.davfs >/dev/null 2>&1; then
+            err "未检测到 davfs2，请先执行菜单 4 并选择 y 安装 WebDAV"
+            return 1
+        fi
+    fi
+
+    mkdir -p "$INFINICLOUD_DAV_MOUNT"
+    write_davfs_mount_config
+    write_davfs_secrets_entry
+
+    info "写入 infinicloud-webdav.service"
+    write_webdav_mount_service
+    systemctl daemon-reload
+
+    info "重新挂载 InfiniCLOUD WebDAV"
+    systemctl stop infinicloud-webdav.service >/dev/null 2>&1 || true
+    umount "$INFINICLOUD_DAV_MOUNT" >/dev/null 2>&1 || umount -l "$INFINICLOUD_DAV_MOUNT" >/dev/null 2>&1 || true
+    rm -f "/var/run/mount.davfs/$(echo "$INFINICLOUD_DAV_MOUNT" | sed 's#/#-#g' | sed 's/^-//').pid"
+    systemctl enable --now infinicloud-webdav.service
+
+    info "测试 WebDAV 目录读写并创建程序目录"
+    ls -lah "$INFINICLOUD_DAV_MOUNT"
+    mkdir -p "$INFINICLOUD_UPLOAD_ROOT/assets"
+    mkdir -p "$INFINICLOUD_UPLOAD_ROOT/accessories"
+    touch "$INFINICLOUD_UPLOAD_ROOT/test_write.txt"
+
+    info "修改程序图片保存目录"
+    if [ -f "${APP_ROOT}/config.py" ]; then
+        cp -f "${APP_ROOT}/config.py" "${APP_ROOT}/config.py.bak_infinicloud_$(date +%Y%m%d_%H%M%S)"
+        patch_config_upload_folder "$INFINICLOUD_UPLOAD_ROOT"
+    else
+        warn "未发现 ${APP_ROOT}/config.py，跳过程序配置修改"
+    fi
+
+    patch_systemd_workers_and_dependencies
+    save_state
+
+    if systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
+        systemctl restart "$SERVICE_NAME"
+    fi
+
+    if [ "$mode" = "install" ]; then
+        ok "InfiniCLOUD WebDAV 已安装并接入程序"
+    else
+        ok "InfiniCLOUD WebDAV 参数已重置并完成切换"
+    fi
+    echo "当前 WebDAV 挂载点：$INFINICLOUD_DAV_MOUNT"
+    echo "当前程序图片目录：$INFINICLOUD_UPLOAD_ROOT"
+    echo "远端业务目录：/${INFINICLOUD_REMOTE_ROOT}/assets 和 /${INFINICLOUD_REMOTE_ROOT}/accessories"
+}
+
+prompt_webdav_install() {
+    echo "InfiniCLOUD WebDAV 安装说明："
+    echo "1) 这里是直连 InfiniCLOUD 的 WebDAV，不再使用 OpenList。"
+    echo "2) 请先在 InfiniCLOUD My Page 开启 Apps Connection，并查看你的 WebDAV URL / Connection ID / Apps Password。"
+    echo "3) 程序远端默认目录固定为：/ism_images/assets 和 /ism_images/accessories。"
+    echo "4) 数据库备份会同步到：/ism_images/asset_manager_latest.sql。"
+    echo
+
+    read -r -p "请输入 WebDAV Connection URL [${INFINICLOUD_DAV_URL:-请从 My Page 复制}]: " input_dav_url
+    read -r -p "请输入 Connection ID [${INFINICLOUD_DAV_USER:-通常与用户 ID 一致}]: " input_user
+    read -r -p "请输入 Password: " input_pass
+    read -r -p "请输入本机挂载目录 [${INFINICLOUD_DAV_MOUNT}]: " input_mount
+
+    if [ -n "${input_dav_url:-}" ]; then INFINICLOUD_DAV_URL="$input_dav_url"; fi
+    if [ -n "${input_user:-}" ]; then INFINICLOUD_DAV_USER="$input_user"; fi
+    if [ -n "${input_pass:-}" ]; then INFINICLOUD_DAV_PASS="$input_pass"; fi
+    if [ -n "${input_mount:-}" ]; then INFINICLOUD_DAV_MOUNT="$input_mount"; fi
+
+    if [ -z "$INFINICLOUD_DAV_URL" ] || [ -z "$INFINICLOUD_DAV_USER" ] || [ -z "$INFINICLOUD_DAV_PASS" ]; then
+        err "WebDAV Connection URL、Connection ID、Password 不能为空"
+        return 1
+    fi
+
+    recompute_infinicloud_paths
+    echo
+    echo "当前 WebDAV URL：${INFINICLOUD_DAV_URL}"
+    echo "当前本机挂载点：${INFINICLOUD_DAV_MOUNT}"
+    echo "当前程序图片目录：${INFINICLOUD_UPLOAD_ROOT}"
+    echo "远端业务目录：/${INFINICLOUD_REMOTE_ROOT}/assets 和 /${INFINICLOUD_REMOTE_ROOT}/accessories"
+    echo
+
+    apply_webdav_settings install
+}
+
+prompt_webdav_reset() {
+    load_state
+    ensure_state_defaults
+
+    if [ -z "$INFINICLOUD_DAV_MOUNT" ]; then
+        err "未找到现有挂载目录，请先执行菜单 4 并选择 y 安装 WebDAV"
+        return 1
+    fi
+
+    echo "WebDAV 重置说明："
+    echo "1) 仅重置 WebDAV 连接参数并重新挂载。"
+    echo "2) 不安装新软件，不修改 Nginx / MariaDB / Python 环境。"
+    echo "3) 使用当前本机挂载目录：${INFINICLOUD_DAV_MOUNT}"
+    echo "4) 远端业务目录保持为：/${INFINICLOUD_REMOTE_ROOT}/assets 和 /${INFINICLOUD_REMOTE_ROOT}/accessories"
+    echo
+
+    read -r -p "请输入新的 WebDAV Connection URL [${INFINICLOUD_DAV_URL:-请从 My Page 复制}]: " input_dav_url
+    read -r -p "请输入新的 Connection ID [${INFINICLOUD_DAV_USER:-通常与用户 ID 一致}]: " input_user
+    read -r -p "请输入新的 Password [直接回车则保持当前密码]: " input_pass
+
+    if [ -n "${input_dav_url:-}" ]; then INFINICLOUD_DAV_URL="$input_dav_url"; fi
+    if [ -n "${input_user:-}" ]; then INFINICLOUD_DAV_USER="$input_user"; fi
+    if [ -n "${input_pass:-}" ]; then INFINICLOUD_DAV_PASS="$input_pass"; fi
+
+    if [ -z "$INFINICLOUD_DAV_URL" ] || [ -z "$INFINICLOUD_DAV_USER" ] || [ -z "$INFINICLOUD_DAV_PASS" ]; then
+        err "WebDAV Connection URL、Connection ID、Password 不能为空"
+        return 1
+    fi
+
+    recompute_infinicloud_paths
+    echo
+    echo "将重置为新的 WebDAV URL：${INFINICLOUD_DAV_URL}"
+    echo "当前本机挂载点保持：${INFINICLOUD_DAV_MOUNT}"
+    echo "当前程序图片目录：${INFINICLOUD_UPLOAD_ROOT}"
+    echo "远端业务目录保持：/${INFINICLOUD_REMOTE_ROOT}/assets 和 /${INFINICLOUD_REMOTE_ROOT}/accessories"
+    echo
+
+    apply_webdav_settings reset
+}
+
+install_webdav() {
+    load_state
+    ensure_state_defaults
+
+    echo "菜单 4：安装/重置 WebDAV"
+    echo "  y = 安装 WebDAV"
+    echo "  c = 重置 WebDAV 参数并切换网盘"
+    echo "  n = 跳过，返回主菜单"
+    read -r -p "请选择 [y/c/n]: " webdav_action
+
+    case "${webdav_action:-n}" in
+        y|Y)
+            prompt_webdav_install
+            ;;
+        c|C)
+            prompt_webdav_reset
+            ;;
+        n|N|"")
+            warn "已跳过 WebDAV 配置，返回主菜单"
+            return 0
+            ;;
+        *)
+            warn "无效选项，返回主菜单"
+            return 0
+            ;;
+    esac
+}
+
+check_webdav_connectivity() {
+    load_state
+    ensure_state_defaults
+
+    if [ -z "$INFINICLOUD_DAV_MOUNT" ] || [ -z "$INFINICLOUD_DAV_URL" ]; then
+        err "未找到 WebDAV 配置，请先执行“安装 WebDAV”"
+        return 1
+    fi
+
+    info "检测 InfiniCLOUD WebDAV 连通性"
+    mkdir -p "$INFINICLOUD_DAV_MOUNT"
+    systemctl stop infinicloud-webdav.service >/dev/null 2>&1 || true
+    umount "$INFINICLOUD_DAV_MOUNT" >/dev/null 2>&1 || umount -l "$INFINICLOUD_DAV_MOUNT" >/dev/null 2>&1 || true
+    rm -f "/var/run/mount.davfs/$(echo "$INFINICLOUD_DAV_MOUNT" | sed 's#/#-#g' | sed 's/^-//').pid"
+    systemctl start infinicloud-webdav.service
+
+    ls -lah "$INFINICLOUD_DAV_MOUNT"
+    mkdir -p "$INFINICLOUD_UPLOAD_ROOT/assets" "$INFINICLOUD_UPLOAD_ROOT/accessories"
+    touch "$INFINICLOUD_UPLOAD_ROOT/.infinicloud_probe_$(date +%Y%m%d_%H%M%S)"
+    ok "InfiniCLOUD WebDAV 连通性检测通过"
+}
+
 write_backup_script() {
     cat > /usr/local/bin/asset_manager_backup.sh <<EOF_BACKUP
 #!/usr/bin/env bash
@@ -604,31 +659,34 @@ BACKUP_FILE="${BACKUP_FILE}"
 DB_NAME="${DB_NAME}"
 DB_USER="${DB_USER}"
 DB_PASS="${DB_PASS}"
-OPENLIST_DAV_MOUNT="${OPENLIST_DAV_MOUNT}"
-OPENLIST_UPLOAD_ROOT="${OPENLIST_UPLOAD_ROOT}"
-REMOTE_BACKUP_FILE="${OPENLIST_UPLOAD_ROOT}/asset_manager_latest.sql"
+INFINICLOUD_DAV_MOUNT="${INFINICLOUD_DAV_MOUNT}"
+INFINICLOUD_UPLOAD_ROOT="${INFINICLOUD_UPLOAD_ROOT}"
+REMOTE_BACKUP_FILE="${INFINICLOUD_UPLOAD_ROOT}/asset_manager_latest.sql"
 
 mkdir -p "\$BACKUP_DIR"
 rm -f "\$BACKUP_DIR"/*.sql
 mysqldump -u"\$DB_USER" -p"\$DB_PASS" "\$DB_NAME" > "\$BACKUP_FILE"
 
-if systemctl list-unit-files 2>/dev/null | grep -q '^openlist-webdav\.service'; then
-    systemctl start openlist-webdav.service >/dev/null 2>&1 || true
+if systemctl list-unit-files 2>/dev/null | grep -q '^infinicloud-webdav\.service'; then
+    systemctl start infinicloud-webdav.service >/dev/null 2>&1 || true
 fi
 
-if mountpoint -q "\$OPENLIST_DAV_MOUNT" && [ -d "\$OPENLIST_UPLOAD_ROOT" ]; then
-    find "\$OPENLIST_UPLOAD_ROOT" -maxdepth 1 -type f -name '*.sql' -delete || true
+if mountpoint -q "\$INFINICLOUD_DAV_MOUNT" && [ -d "\$INFINICLOUD_UPLOAD_ROOT" ]; then
+    find "\$INFINICLOUD_UPLOAD_ROOT" -maxdepth 1 -type f -name '*.sql' -delete || true
     cp -f "\$BACKUP_FILE" "\$REMOTE_BACKUP_FILE"
     echo "[OK] 云盘备份已同步到 \$REMOTE_BACKUP_FILE"
 else
-    echo "[WARN] OpenList WebDAV 未挂载或远端目录不存在，仅保留本地备份：\$BACKUP_FILE"
+    echo "[WARN] WebDAV 未挂载或远端目录不存在，仅保留本地备份：\$BACKUP_FILE"
 fi
 EOF_BACKUP
     chmod +x /usr/local/bin/asset_manager_backup.sh
 }
 
 setup_backup() {
-    info "配置每天自动备份数据库：本地仅保留最新一份；若已接入 OpenList WebDAV，则自动同步到云盘 ${OPENLIST_REMOTE_DIR} 根目录并仅保留最新一份"
+    load_state
+    ensure_state_defaults
+
+    info "配置每天自动备份数据库：本地仅保留最新一份；若已接入 WebDAV，则自动同步到 /${INFINICLOUD_REMOTE_ROOT}/asset_manager_latest.sql"
     mkdir -p "$BACKUP_DIR"
     write_backup_script
     cat > /etc/cron.d/asset_manager_backup <<EOF_CRON
@@ -659,6 +717,61 @@ restore_database() {
     ok "数据库恢复完成"
 }
 
+uninstall_webdav() {
+    load_state
+    ensure_state_defaults
+
+    warn "该操作会卸载本机 WebDAV 挂载，并把程序图片目录切回本地：${LOCAL_UPLOAD_ROOT}"
+    warn "不会删除你在 InfiniCLOUD 上已存在的业务文件"
+    read -r -p "输入 YES 确认卸载 WebDAV: " confirm_text
+    if [ "${confirm_text:-}" != "YES" ]; then
+        warn "已取消卸载"
+        return 0
+    fi
+
+    info "停止并卸载 infinicloud-webdav.service"
+    systemctl stop infinicloud-webdav.service >/dev/null 2>&1 || true
+    systemctl disable infinicloud-webdav.service >/dev/null 2>&1 || true
+    umount "$INFINICLOUD_DAV_MOUNT" >/dev/null 2>&1 || umount -l "$INFINICLOUD_DAV_MOUNT" >/dev/null 2>&1 || true
+    rm -f "/var/run/mount.davfs/$(echo "$INFINICLOUD_DAV_MOUNT" | sed 's#/#-#g' | sed 's/^-//').pid"
+    rm -f "$WEBDAV_MOUNT_SERVICE"
+
+    info "清理 davfs 配置"
+    python3 - "$INFINICLOUD_DAV_MOUNT" <<'PY'
+from pathlib import Path
+import sys, re
+mount_path = sys.argv[1]
+conf = Path('/etc/davfs2/davfs2.conf')
+if conf.exists():
+    text = conf.read_text(encoding='utf-8')
+    pattern = re.compile(rf'^\[{re.escape(mount_path)}\]\n(?:.*\n)*?(?=^\[|\Z)', re.MULTILINE)
+    text = pattern.sub('', text).strip()
+    conf.write_text((text + '\n') if text else '', encoding='utf-8')
+secrets = Path('/etc/davfs2/secrets')
+if secrets.exists():
+    lines = [line for line in secrets.read_text(encoding='utf-8').splitlines() if not line.startswith(mount_path + ' ')]
+    secrets.write_text(('\n'.join(lines).rstrip() + '\n') if lines else '', encoding='utf-8')
+PY
+
+    info "卸载 davfs2 软件包"
+    apt-get remove -y davfs2 || true
+    apt-get autoremove -y || true
+
+    info "将程序图片目录切回本地"
+    mkdir -p "$LOCAL_UPLOAD_ROOT/assets" "$LOCAL_UPLOAD_ROOT/accessories"
+    if [ -f "${APP_ROOT}/config.py" ]; then
+        cp -f "${APP_ROOT}/config.py" "${APP_ROOT}/config.py.bak_local_$(date +%Y%m%d_%H%M%S)"
+        patch_config_upload_folder "$LOCAL_UPLOAD_ROOT"
+    fi
+
+    if [ -f "$SYSTEMD_SERVICE_FILE" ]; then
+        write_systemd
+    fi
+
+    systemctl daemon-reload
+    ok "WebDAV 已卸载，本地上传目录已恢复为：${LOCAL_UPLOAD_ROOT}"
+}
+
 restart_service() {
     info "重启系统"
     systemctl daemon-reload
@@ -670,7 +783,7 @@ restart_service() {
 install_asset_system() {
     prepare_dirs
     download_files
-    deploy_files || return 1
+    deploy_files
     sync_custom_files
     setup_python_env
     setup_database
@@ -685,34 +798,55 @@ install_asset_system() {
     echo "本次安装最后已固定覆盖两个核心文件："
     echo "1) ${APP_DIR}/routes/__init__.py"
     echo "2) ${APP_ROOT}/asset_manager.sql"
-    echo "后续如 app.zip / config.py / run.py / requirements.txt 不变，你主要维护这两个文件即可。"
-    echo "建议下一步顺序：4. 安装 OpenList  ->  5. 安装 WebDAV  ->  7. 设置cron备份数据库"
+    echo "建议下一步顺序：4. 安装 WebDAV -> 5. WebDAV 连通性检测 -> 6. 设置cron备份数据库"
+}
+
+confirm_install_asset_system() {
+    echo "你选择了【2 安装系统】。"
+    echo "该操作会部署程序、初始化数据库、配置 systemd 和 Nginx。"
+    read -r -p "确认安装吗？输入 y/Y 继续，n/N 取消并返回主菜单: " confirm_install
+
+    case "${confirm_install:-n}" in
+        y|Y)
+            install_asset_system
+            ;;
+        n|N|"")
+            warn "已取消安装，返回主菜单"
+            return 0
+            ;;
+        *)
+            warn "无效输入，已取消安装，返回主菜单"
+            return 0
+            ;;
+    esac
 }
 
 show_menu() {
     clear
-    printf "${BOLD}${BLUE}================ asset_manager + OpenList 菜单 ================${NC}
-"
-    printf "${GREEN} 1.${NC} ${GREEN}安装依赖${NC}
-"
-    printf "${RED} 2.${NC} ${RED}安装系统${NC}
-"
-    printf "${CYAN} 3.${NC} ${CYAN}重启系统${NC}
-"
-    printf "${CYAN} 4.${NC} ${WHITE}安装 OpenList${NC}
-"
-    printf "${CYAN} 5.${NC} ${WHITE}安装 WebDAV${NC}
-"
-    printf "${CYAN} 6.${NC} ${WHITE}WebDAV 连通性检测${NC}
-"
-    printf "${MAGENTA} 7.${NC} ${WHITE}设置cron备份数据库${NC}
-"
-    printf "${MAGENTA} 8.${NC} ${WHITE}恢复数据库${NC}
-"
-    printf "${RED} 0.${NC} ${WHITE}退出${NC}
-"
-    printf "${BOLD}${BLUE}===============================================================${NC}
-"
+    printf "\n"
+    printf "${BOLD}${BLUE}=========================================================================${NC}\n"
+    printf "${BOLD}${WHITE}              asset_manager WebDAV 管理菜单                             ${NC}\n"
+    printf "${BOLD}${BLUE}=========================================================================${NC}\n"
+
+    printf "${BOLD}${GREEN} [1] 安装依赖${NC}              ${WHITE}安装基础环境：Nginx / MariaDB / Python / OCR${NC}\n"
+    printf "${BOLD}${RED} [2] 安装系统${NC}              ${WHITE}部署程序、初始化数据库、配置服务${NC}\n"
+    printf "${BOLD}${BLUE}-------------------------------------------------------------------------${NC}\n"
+	
+    printf "${BOLD}${CYAN} [3] 重启系统${NC}              ${WHITE}重启 asset_manager 服务${NC}\n"
+    printf "${BOLD}${YELLOW} [4] 安装/重置 WebDAV${NC}      ${WHITE}首次挂载或切换新的 WebDAV 网盘${NC}\n"
+    printf "${BOLD}${YELLOW} [5] WebDAV 连通性检测${NC}     ${WHITE}检测挂载、目录、写入是否正常${NC}\n"
+
+    printf "${BOLD}${YELLOW} [6] 设置cron备份数据库${NC}    ${WHITE}每天自动备份数据库${NC}\n"
+    printf "${BOLD}${MAGENTA} [7] 恢复数据库${NC}            ${WHITE}从本地最新备份恢复数据库${NC}\n"
+
+    printf "${BOLD}${RED} [8] 卸载WebDAV${NC}            ${YELLOW}移除挂载并恢复本地上传目录${NC}\n"
+    printf "${BOLD}${RED} [0] 退出${NC}                  ${WHITE}退出当前脚本${NC}\n"
+
+    printf "${BOLD}${BLUE}-------------------------------------------------------------------------${NC}\n"
+    printf "${BOLD}${YELLOW} ★ 推荐顺序：${NC}${GREEN}1 -> 2 -> 4 -> 5 -> 6${NC}\n"
+    printf "${BOLD}${RED} ★ 注意：${NC}${WHITE}菜单 4 和菜单 8 会修改 ${BOLD}${YELLOW}config.py${NC}${WHITE} 的上传路径${NC}\n"
+    printf "${BOLD}${BLUE}=========================================================================${NC}\n"
+    printf "\n"
 }
 
 main() {
@@ -727,13 +861,13 @@ main() {
         echo
         case "${choice:-}" in
             1) install_packages ;;
-            2) install_asset_system ;;
+            2) confirm_install_asset_system ;;
             3) restart_service ;;
-            4) install_openlist ;;
-            5) install_openlist_webdav ;;
-            6) check_openlist_webdav_connectivity ;;
-            7) setup_backup ;;
-            8) restore_database ;;
+            4) install_webdav ;;
+            5) check_webdav_connectivity ;;
+            6) setup_backup ;;
+            7) restore_database ;;
+            8) uninstall_webdav ;;
             0) exit 0 ;;
             *) warn "无效选项" ;;
         esac
