@@ -6,6 +6,9 @@ APP_DIR="${APP_ROOT}/app"
 VENV_DIR="${APP_ROOT}/venv"
 BACKUP_DIR="${APP_ROOT}/backups"
 BACKUP_FILE="${BACKUP_DIR}/asset_manager_latest.sql"
+BACKUP_SCRIPT="${APP_ROOT}/ism_backup.sh"
+CRON_BACKUP_FILE="/etc/cron.d/asset_manager_backup"
+BACKUP_LOG_FILE="/var/log/asset_manager_backup.log"
 
 SERVICE_NAME="asset_manager"
 SYSTEMD_SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
@@ -480,6 +483,14 @@ PY
     chmod 600 /etc/davfs2/secrets
 }
 
+show_reset_backup_cron_notice() {
+    printf "\n${BOLD}${YELLOW}=================================================================${NC}\n"
+    printf "${BOLD}${RED} ★ WebDAV 配置已变化，请立即重新执行菜单 6 重置 cron 备份任务 ★ ${NC}\n"
+    printf "${BOLD}${WHITE} 当前备份脚本：${BACKUP_SCRIPT}${NC}\n"
+    printf "${BOLD}${WHITE} 当前日志文件：${BACKUP_LOG_FILE}${NC}\n"
+    printf "${BOLD}${YELLOW}=================================================================${NC}\n\n"
+}
+
 apply_webdav_settings() {
     local mode="$1"
 
@@ -524,6 +535,7 @@ apply_webdav_settings() {
 
     patch_systemd_workers_and_dependencies
     save_state
+    write_backup_script
 
     if systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
         systemctl restart "$SERVICE_NAME"
@@ -537,6 +549,8 @@ apply_webdav_settings() {
     echo "当前 WebDAV 挂载点：$DAV_MOUNT"
     echo "当前程序图片目录：$DAV_UPLOAD_ROOT"
     echo "远端业务目录：/${DAV_REMOTE_ROOT}/assets 和 /${DAV_REMOTE_ROOT}/accessories"
+    echo "备份脚本已重建：$BACKUP_SCRIPT"
+    show_reset_backup_cron_notice
 }
 
 prompt_webdav_install() {
@@ -664,7 +678,8 @@ check_webdav_connectivity() {
 }
 
 write_backup_script() {
-    cat > /usr/local/bin/asset_manager_backup.sh <<EOF_BACKUP
+    mkdir -p "$APP_ROOT"
+    cat > "$BACKUP_SCRIPT" <<EOF_BACKUP
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -676,41 +691,118 @@ DB_PASS="${DB_PASS}"
 DAV_MOUNT="${DAV_MOUNT}"
 DAV_UPLOAD_ROOT="${DAV_UPLOAD_ROOT}"
 REMOTE_BACKUP_FILE="${DAV_UPLOAD_ROOT}/asset_manager_latest.sql"
+BACKUP_LOG_FILE="${BACKUP_LOG_FILE}"
 
 mkdir -p "\$BACKUP_DIR"
 rm -f "\$BACKUP_DIR"/*.sql
 mysqldump -u"\$DB_USER" -p"\$DB_PASS" "\$DB_NAME" > "\$BACKUP_FILE"
 
 if systemctl list-unit-files 2>/dev/null | grep -q '^${WEBDAV_SERVICE_NAME}\.service'; then
-    systemctl start "${WEBDAV_SERVICE_NAME}.service" >/dev/null 2>&1 || true
+    if ! mountpoint -q "\$DAV_MOUNT"; then
+        systemctl restart "${WEBDAV_SERVICE_NAME}.service" >/dev/null 2>&1 || true
+        sleep 2
+    fi
 fi
 
-if mountpoint -q "\$DAV_MOUNT" && [ -d "\$DAV_UPLOAD_ROOT" ]; then
+if mountpoint -q "\$DAV_MOUNT"; then
+    mkdir -p "\$DAV_UPLOAD_ROOT"
     find "\$DAV_UPLOAD_ROOT" -maxdepth 1 -type f -name '*.sql' -delete || true
     cp -f "\$BACKUP_FILE" "\$REMOTE_BACKUP_FILE"
     echo "[OK] 云盘备份已同步到 \$REMOTE_BACKUP_FILE"
 else
-    echo "[WARN] WebDAV 未挂载或远端目录不存在，仅保留本地备份：\$BACKUP_FILE"
+    echo "[WARN] WebDAV 未挂载，仅保留本地备份：\$BACKUP_FILE"
 fi
 EOF_BACKUP
-    chmod +x /usr/local/bin/asset_manager_backup.sh
+    chmod +x "$BACKUP_SCRIPT"
+    ok "数据库备份脚本已生成：$BACKUP_SCRIPT"
+}
+
+install_backup_cron() {
+    if [ ! -f "$BACKUP_SCRIPT" ]; then
+        err "未找到备份脚本：$BACKUP_SCRIPT，请先执行菜单 4 安装或重置 WebDAV 以自动生成脚本"
+        return 1
+    fi
+
+    info "生成 cron 自动备份任务"
+    cat > "$CRON_BACKUP_FILE" <<EOF_CRON
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+0 2 * * * root ${BACKUP_SCRIPT} >> ${BACKUP_LOG_FILE} 2>&1
+EOF_CRON
+    chmod 644 "$CRON_BACKUP_FILE"
+    systemctl restart cron
+    ok "cron 自动备份已开启：每天 02:00 执行 ${BACKUP_SCRIPT}"
+}
+
+show_backup_cron_status() {
+    info "查看 cron 备份任务配置"
+    if [ -f "$CRON_BACKUP_FILE" ]; then
+        cat "$CRON_BACKUP_FILE"
+    else
+        warn "当前未发现 cron 备份任务：$CRON_BACKUP_FILE"
+    fi
+
+    echo
+    info "查看备份脚本"
+    if [ -f "$BACKUP_SCRIPT" ]; then
+        ls -lah "$BACKUP_SCRIPT"
+    else
+        warn "当前未发现备份脚本：$BACKUP_SCRIPT"
+    fi
+
+    echo
+    info "查看 cron 服务状态"
+    systemctl status cron --no-pager || true
+
+    echo
+    info "查看最近备份日志"
+    if [ -f "$BACKUP_LOG_FILE" ]; then
+        tail -n 50 "$BACKUP_LOG_FILE"
+    else
+        warn "当前还没有备份日志：$BACKUP_LOG_FILE"
+    fi
+}
+
+delete_backup_cron() {
+    if [ -f "$CRON_BACKUP_FILE" ]; then
+        rm -f "$CRON_BACKUP_FILE"
+        systemctl restart cron
+        ok "cron 自动备份任务已删除：$CRON_BACKUP_FILE"
+    else
+        warn "未找到 cron 备份任务，无需删除"
+    fi
 }
 
 setup_backup() {
     load_state
     ensure_state_defaults
 
-    info "配置每天自动备份数据库：本地仅保留最新一份；若已接入 WebDAV，则自动同步到 /${DAV_REMOTE_ROOT}/asset_manager_latest.sql"
-    mkdir -p "$BACKUP_DIR"
-    write_backup_script
-    cat > /etc/cron.d/asset_manager_backup <<EOF_CRON
-SHELL=/bin/bash
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-0 2 * * * root /usr/local/bin/asset_manager_backup.sh >> /var/log/asset_manager_backup.log 2>&1
-EOF_CRON
-    chmod 644 /etc/cron.d/asset_manager_backup
-    systemctl restart cron
-    ok "自动备份已开启。本地备份：$BACKUP_FILE；云盘备份文件名：asset_manager_latest.sql"
+    echo "菜单 6：管理 cron 数据库备份任务"
+    echo "  1 = 生成/重置 cron 备份任务"
+    echo "  2 = 查看 cron 任务和运行情况"
+    echo "  3 = 删除 cron 备份任务"
+    echo "  0 = 返回主菜单"
+    read -r -p "请选择 [1/2/3/0]: " backup_choice
+
+    case "${backup_choice:-0}" in
+        1)
+            install_backup_cron
+            ;;
+        2)
+            show_backup_cron_status
+            ;;
+        3)
+            delete_backup_cron
+            ;;
+        0|"")
+            warn "已返回主菜单"
+            return 0
+            ;;
+        *)
+            warn "无效选项，返回主菜单"
+            return 0
+            ;;
+    esac
 }
 
 restore_database() {
@@ -813,7 +905,7 @@ install_asset_system() {
     echo "1) ${APP_DIR}/routes/__init__.py"
     echo "2) ${APP_DIR}/routes/ocr_recognizer.py"
     echo "3) ${APP_ROOT}/asset_manager.sql"
-    echo "建议下一步顺序：4. 安装 WebDAV -> 5. WebDAV 连通性检测 -> 6. 设置cron备份数据库"
+    echo "建议下一步顺序：4. 安装 WebDAV -> 5. WebDAV 连通性检测 -> 6. 管理cron备份任务"
 }
 
 confirm_install_asset_system() {
@@ -851,7 +943,7 @@ show_menu() {
     printf "${BOLD}${YELLOW} [4] 安装/重置 WebDAV${NC}      ${WHITE}首次挂载或切换新的 WebDAV 网盘${NC}\n"
     printf "${BOLD}${YELLOW} [5] WebDAV 连通性检测${NC}     ${WHITE}检测挂载、目录、写入是否正常${NC}\n"
 
-    printf "${BOLD}${YELLOW} [6] 设置cron备份数据库${NC}    ${WHITE}每天自动备份数据库${NC}\n"
+    printf "${BOLD}${YELLOW} [6] 管理cron备份任务${NC}      ${WHITE}生成、查看、删除数据库备份 cron${NC}\n"
     printf "${BOLD}${MAGENTA} [7] 恢复数据库${NC}            ${WHITE}从本地最新备份恢复数据库${NC}\n"
 
     printf "${BOLD}${RED} [8] 卸载WebDAV${NC}            ${YELLOW}移除挂载并恢复本地上传目录${NC}\n"
@@ -859,7 +951,7 @@ show_menu() {
 
     printf "${BOLD}${BLUE}-------------------------------------------------------------------------${NC}\n"
     printf "${BOLD}${YELLOW} ★ 推荐顺序：${NC}${GREEN}1 -> 2 -> 4 -> 5 -> 6${NC}\n"
-    printf "${BOLD}${RED} ★ 注意：${NC}${WHITE}菜单 4 和菜单 8 会修改 ${BOLD}${YELLOW}config.py${NC}${WHITE} 的上传路径${NC}\n"
+    printf "${BOLD}${RED} ★ 注意：${NC}${WHITE}菜单 4 会重建 ${BOLD}${YELLOW}ism_backup.sh${NC}${WHITE}，完成后请再执行菜单 6 重置 cron${NC}\n"
     printf "${BOLD}${BLUE}=========================================================================${NC}\n"
     printf "\n"
 }
