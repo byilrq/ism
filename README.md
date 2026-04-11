@@ -2,7 +2,7 @@
 2. https://github.com/byilrq/ism/blob/main/asset_manager.sql   
 3. 如果需要添加域名：可以添加域名，域名对应的证书在/etc/letsencrypt/live下面
 4. 反向代理的端口是2083，最后可以使用域名：2083访问。
-5. 每天自动备份数据库到/root/asset_manager/backups和云盘,滚动保留一份最新的数据库备份删除旧的备份文件；
+5. 每天自动备份数据库到/root/asset_manager/backups和云盘,滚动保留一份最新的数据库备份删除旧的备份文件。
 6.系统必须是debian 12或者ununtu 22以上系统。
 主设备图片上传位置：/root/asset_manager/app/uploads/images/assets
 配件图片上传位置：/root/asset_manager/app/uploads/images/accessories
