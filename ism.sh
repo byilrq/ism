@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_ROOT="/root/asset_manager"
+APP_ROOT="/root/ism"
 APP_DIR="${APP_ROOT}/app"
 VENV_DIR="${APP_ROOT}/venv"
 BACKUP_DIR="${APP_ROOT}/backups"
@@ -14,16 +14,16 @@ SERVICE_NAME="asset_manager"
 SYSTEMD_SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 NGINX_SITE_FILE="/etc/nginx/sites-available/${SERVICE_NAME}_2083.conf"
 NGINX_SITE_LINK="/etc/nginx/sites-enabled/${SERVICE_NAME}_2083.conf"
-STATE_FILE="/root/.asset_manager_install.conf"
+STATE_FILE="/root/.ism_install.conf"
 
 RAW_BASE="https://raw.githubusercontent.com/byilrq/ism/main"
-APP_ZIP_URL="${RAW_BASE}/app.zip"
+REPO_URL="https://github.com/byilrq/ism.git"
 CONFIG_URL="${RAW_BASE}/config.py"
 RUN_URL="${RAW_BASE}/run.py"
 REQ_URL="${RAW_BASE}/requirements.txt"
 SQL_URL="${RAW_BASE}/asset_manager.sql"
 
-TMP_DIR="/tmp/asset_manager_install"
+TMP_DIR="/tmp/ism_install"
 DB_NAME="asset_manager"
 DB_USER="asset_user"
 DB_PASS="by123"
@@ -222,7 +222,7 @@ install_dependencies() {
     info "安装依赖：Nginx / MariaDB / Python / OCR / WebDAV / CloudDrive 运行库"
     apt-get update
     apt-get install -y \
-        nginx mariadb-server cron curl unzip ca-certificates jq tar fuse3 davfs2 \
+        nginx mariadb-server cron curl git ca-certificates jq tar fuse3 davfs2 \
         python3 python3-venv python3-pip python3-dev \
         build-essential default-libmysqlclient-dev pkg-config \
         tesseract-ocr tesseract-ocr-chi-sim
@@ -339,13 +339,28 @@ download_files() {
     rm -rf "$TMP_DIR"
     mkdir -p "$TMP_DIR"
 
-    curl -L --fail --retry 3 -o "$TMP_DIR/app.zip" "$APP_ZIP_URL"
-    curl -L --fail --retry 3 -o "$TMP_DIR/config.py" "$CONFIG_URL"
-    curl -L --fail --retry 3 -o "$TMP_DIR/run.py" "$RUN_URL"
-    curl -L --fail --retry 3 -o "$TMP_DIR/requirements.txt" "$REQ_URL"
-    curl -L --fail --retry 3 -o "$TMP_DIR/asset_manager.sql" "$SQL_URL"
+    if ! command -v git >/dev/null 2>&1; then
+        export DEBIAN_FRONTEND=noninteractive
+        info "未检测到 git，正在安装 git"
+        apt-get update
+        apt-get install -y git ca-certificates
+    fi
 
-    ok "项目文件下载完成（app 目录统一来自 app.zip）"
+    git clone --depth 1 "$REPO_URL" "$TMP_DIR/repo"
+
+    for required_path in \
+        "$TMP_DIR/repo/app" \
+        "$TMP_DIR/repo/config.py" \
+        "$TMP_DIR/repo/run.py" \
+        "$TMP_DIR/repo/requirements.txt" \
+        "$TMP_DIR/repo/asset_manager.sql"; do
+        if [ ! -e "$required_path" ]; then
+            err "仓库缺少必要文件或目录：$required_path"
+            return 1
+        fi
+    done
+
+    ok "项目文件下载完成（app 目录来自 GitHub 仓库 app/，不再使用 app.zip）"
 }
 
 deploy_files() {
@@ -358,20 +373,12 @@ deploy_files() {
     fi
 
     mkdir -p "$APP_ROOT" "$APP_DIR" "$ASSET_IMG_DIR" "$ACCESSORY_IMG_DIR" "$BACKUP_DIR"
-    rm -rf "$TMP_DIR/app_extract"
-    mkdir -p "$TMP_DIR/app_extract"
-    unzip -oq "$TMP_DIR/app.zip" -d "$TMP_DIR/app_extract"
 
-    if [ -d "$TMP_DIR/app_extract/app" ]; then
-        cp -a "$TMP_DIR/app_extract/app/." "$APP_DIR/"
-    else
-        cp -a "$TMP_DIR/app_extract/." "$APP_DIR/"
-    fi
-
-    cp -f "$TMP_DIR/config.py" "$APP_ROOT/config.py"
-    cp -f "$TMP_DIR/run.py" "$APP_ROOT/run.py"
-    cp -f "$TMP_DIR/requirements.txt" "$APP_ROOT/requirements.txt"
-    cp -f "$TMP_DIR/asset_manager.sql" "$APP_ROOT/asset_manager.sql"
+    cp -a "$TMP_DIR/repo/app/." "$APP_DIR/"
+    cp -f "$TMP_DIR/repo/config.py" "$APP_ROOT/config.py"
+    cp -f "$TMP_DIR/repo/run.py" "$APP_ROOT/run.py"
+    cp -f "$TMP_DIR/repo/requirements.txt" "$APP_ROOT/requirements.txt"
+    cp -f "$TMP_DIR/repo/asset_manager.sql" "$APP_ROOT/asset_manager.sql"
 
     mkdir -p "$ASSET_IMG_DIR" "$ACCESSORY_IMG_DIR"
     ok "应用文件已部署"
@@ -380,9 +387,12 @@ deploy_files() {
 sync_custom_files() {
     info "同步仓库主文件"
 
-    cp -f "$TMP_DIR/asset_manager.sql" "$APP_ROOT/asset_manager.sql"
+    cp -f "$TMP_DIR/repo/config.py" "$APP_ROOT/config.py"
+    cp -f "$TMP_DIR/repo/run.py" "$APP_ROOT/run.py"
+    cp -f "$TMP_DIR/repo/requirements.txt" "$APP_ROOT/requirements.txt"
+    cp -f "$TMP_DIR/repo/asset_manager.sql" "$APP_ROOT/asset_manager.sql"
 
-    ok "app 目录已全部从 app.zip 部署完成，asset_manager.sql 已同步"
+    ok "仓库主文件已同步，app 目录已从 GitHub app/ 部署完成"
 }
 
 setup_python_env() {
@@ -1700,14 +1710,14 @@ show_menu() {
     clear
     printf "\n"
     printf "${BOLD}${BLUE}=========================================================================${NC}\n"
-    printf "${BOLD}${WHITE}         asset_manager WebDAV / CloudDrive 管理菜单                     ${NC}\n"
+    printf "${BOLD}${WHITE}         ISM 资产管理 WebDAV / CloudDrive 管理菜单                     ${NC}\n"
     printf "${BOLD}${BLUE}=========================================================================${NC}\n"
 
     printf "${BOLD}${GREEN} [1] 安装依赖${NC}              ${WHITE}安装基础环境：Nginx / MariaDB / Python / OCR${NC}\n"
     printf "${BOLD}${RED} [2] 安装系统${NC}              ${WHITE}部署程序、初始化数据库、配置服务${NC}\n"
     printf "${BOLD}${BLUE}-------------------------------------------------------------------------${NC}\n"
 
-    printf "${BOLD}${CYAN} [3] 重启系统${NC}              ${WHITE}重启 asset_manager 服务${NC}\n"
+    printf "${BOLD}${CYAN} [3] 重启系统${NC}              ${WHITE}重启 ISM 服务${NC}\n"
     printf "${BOLD}${YELLOW} [4] 安装/重置 WebDAV${NC}      ${WHITE}首次挂载或切换新的 WebDAV 网盘${NC}\n"
     printf "${BOLD}${BLUE} [5] 安装 CloudDrive${NC}        ${WHITE}安装 CloudDrive 并写入 systemd${NC}\n"
     printf "${BOLD}${CYAN} [6] 设置系统写入路径${NC}     ${WHITE}切换到WebDAV/ CloudDrive /本地目录${NC}\n"
