@@ -439,10 +439,11 @@ def save_uploaded_image(file_storage, subdir, filename_prefix="asset"):
         return None
 
     ext = file_storage.filename.rsplit(".", 1)[1].lower()
-    date_part = datetime.now().strftime("%Y.%m.%d")
-    random_part = uuid.uuid4().hex[:16]
-    safe_prefix = sanitize_image_prefix(filename_prefix)
-    filename = f"{safe_prefix}.{date_part}.{random_part}.{ext}"
+    # 图片文件名统一缩短为：本地时间 + 6位随机码，例如 20260518143022_a1b2c3.jpg。
+    # 不再拼接资产编号前缀，避免手机端预览和后续维护时名称过长。
+    local_time_part = datetime.now().strftime("%Y%m%d%H%M%S")
+    random_part = uuid.uuid4().hex[:6]
+    filename = f"{local_time_part}_{random_part}.{ext}"
 
     folder = os.path.join(Config.UPLOAD_FOLDER, subdir)
     os.makedirs(folder, exist_ok=True)
@@ -1927,7 +1928,7 @@ def register_routes(app):
                             db.session.delete(img)
 
                     image_prefix = sanitize_image_prefix(current_location)
-                    for file_storage in image_files:
+                    for file_storage in image_files[:5]:
                         rel = save_uploaded_image(file_storage, "asset_locations", image_prefix)
                         if rel:
                             db.session.add(AssetLocationImage(location_name=current_location, image_path=rel))
@@ -2422,7 +2423,7 @@ def register_routes(app):
                                 group_no=group_no,
                                 internal_no=internal_no
                             )
-                            for file_storage in image_files:
+                            for file_storage in image_files[:5]:
                                 rel = save_uploaded_image(file_storage, "assets", image_filename_prefix)
                                 if rel:
                                     db.session.add(AssetImage(asset_id=obj.id, image_path=rel))
@@ -2466,7 +2467,7 @@ def register_routes(app):
                                 internal_no=internal_no,
                                 parent_asset=parent_asset
                             )
-                            for file_storage in image_files:
+                            for file_storage in image_files[:5]:
                                 rel = save_uploaded_image(file_storage, "accessories", image_filename_prefix)
                                 if rel:
                                     db.session.add(AccessoryImage(accessory_id=obj.id, image_path=rel))
@@ -2567,7 +2568,7 @@ def register_routes(app):
                                     delete_image_file(img.image_path)
                                     db.session.delete(img)
 
-                            for file_storage in image_files:
+                            for file_storage in image_files[:5]:
                                 rel = save_uploaded_image(file_storage, "assets", image_filename_prefix)
                                 if rel:
                                     db.session.add(AssetImage(asset_id=asset.id, image_path=rel))
@@ -2715,7 +2716,7 @@ def register_routes(app):
                                     delete_image_file(img.image_path)
                                     db.session.delete(img)
 
-                            for file_storage in image_files:
+                            for file_storage in image_files[:5]:
                                 rel = save_uploaded_image(file_storage, "accessories", image_filename_prefix)
                                 if rel:
                                     db.session.add(AccessoryImage(accessory_id=accessory.id, image_path=rel))
@@ -3291,6 +3292,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .upload-actions{display:flex;gap:8px;flex-wrap:wrap;}
 .upload-actions button{width:auto;min-width:120px;}
 .file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
+.upload-preview-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}.upload-preview-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #e1e7ef;border-radius:10px;background:#fbfdff;color:#4d5b6b;}.upload-preview-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.upload-remove-btn{width:28px;min-width:28px;height:28px;padding:0;border-radius:999px;background:#dc2626;color:#fff;border:none;box-shadow:none;font-weight:900;line-height:1;display:inline-flex;align-items:center;justify-content:center;}
 .upload-dialog{position:fixed;left:0;top:0;width:100vw;height:100dvh;background:transparent;display:none;z-index:9999;overflow:hidden;} .upload-dialog.show{display:block;} .upload-dialog-card{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);width:min(320px,calc(100vw - 24px));max-width:320px;background:#fff;border-radius:16px;padding:18px;box-shadow:0 20px 40px rgba(15,23,42,.22);z-index:10000;}
 .upload-dialog-title{font-size:18px;font-weight:bold;margin-bottom:12px;text-align:center;color:#163047;}
 .upload-dialog-actions{display:flex;flex-direction:column;gap:10px;}
@@ -3364,14 +3366,102 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 <script>
 function openUploadChooser(dialogId, triggerEl){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.add('show'); } }
 function closeUploadChooser(dialogId){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.remove('show'); } }
-function updateSelectedFiles(inputId, textId, dialogId){
-    const textEl = document.getElementById(textId); if(!textEl){ return; }
-    const inputIds = (textEl.dataset.inputs || inputId || '').split(',').map(item => item.trim()).filter(Boolean);
-    const files = [];
-    inputIds.forEach(id => { const input = document.getElementById(id); if(input && input.files){ Array.from(input.files).forEach(file => files.push(file)); } });
-    textEl.textContent = files.length > 0 ? `已选择 ${files.length} 张：${files.map(file => file.name).join('，')}` : '未选择图片';
-    if(dialogId){ closeUploadChooser(dialogId); }
+const uploadSelectionState = window.uploadSelectionState || (window.uploadSelectionState = {});
+function getUploadInputIds(textEl, fallbackInputId){ return (textEl.dataset.inputs || fallbackInputId || '').split(',').map(item => item.trim()).filter(Boolean); }
+function makeShortUploadName(file){
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const timePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    const randomPart = Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(0, 6).padEnd(6, '0');
+    const originalName = file && file.name ? file.name : '';
+    const extMatch = originalName.match(/\\.([A-Za-z0-9]+)$/);
+    const ext = extMatch ? extMatch[1].toLowerCase() : 'jpg';
+    return `${timePart}_${randomPart}.${ext}`;
 }
+function cloneUploadFileWithShortName(file){
+    if(!file){ return file; }
+    try{
+        if(file.__shortUploadName){ return file; }
+        const newFile = new File([file], makeShortUploadName(file), { type: file.type || 'image/jpeg', lastModified: file.lastModified || Date.now() });
+        Object.defineProperty(newFile, '__shortUploadName', { value: true });
+        return newFile;
+    }catch(e){
+        return file;
+    }
+}
+function syncUploadInputs(textId, activeInputId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || { files: [] };
+    const inputIds = getUploadInputIds(textEl, activeInputId);
+    if(typeof DataTransfer !== 'undefined'){
+        const transfer = new DataTransfer();
+        state.files.forEach(file => transfer.items.add(file));
+        inputIds.forEach((id, index) => {
+            const input = document.getElementById(id);
+            if(!input){ return; }
+            try{ input.files = (id === activeInputId || index === 0) ? transfer.files : new DataTransfer().files; }catch(e){}
+        });
+    }
+}
+function renderUploadSelection(textId, activeInputId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || { files: [] };
+    if(state.files.length <= 0){
+        textEl.textContent = '未选择图片';
+        syncUploadInputs(textId, activeInputId);
+        return;
+    }
+    textEl.innerHTML = '';
+    const summary = document.createElement('div');
+    summary.textContent = `已选择 ${state.files.length} 张（本次最多5张）`;
+    textEl.appendChild(summary);
+    const list = document.createElement('div');
+    list.className = 'upload-preview-list';
+    state.files.forEach((file, index) => {
+        const item = document.createElement('div');
+        item.className = 'upload-preview-item';
+        const name = document.createElement('span');
+        name.className = 'upload-preview-name';
+        name.textContent = file.name || `图片${index + 1}`;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'upload-remove-btn';
+        remove.setAttribute('aria-label', '删除该图片');
+        remove.textContent = '×';
+        remove.onclick = function(){ removeSelectedUploadFile(textId, index, activeInputId); };
+        item.appendChild(name);
+        item.appendChild(remove);
+        list.appendChild(item);
+    });
+    textEl.appendChild(list);
+    syncUploadInputs(textId, activeInputId);
+}
+function removeSelectedUploadFile(textId, index, activeInputId){
+    const state = uploadSelectionState[textId];
+    if(!state){ return; }
+    state.files.splice(index, 1);
+    renderUploadSelection(textId, activeInputId);
+}
+function updateSelectedFiles(inputId, textId, dialogId){
+    const input = document.getElementById(inputId);
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || (uploadSelectionState[textId] = { files: [] });
+    const incoming = input && input.files ? Array.from(input.files).map(cloneUploadFileWithShortName) : [];
+    incoming.forEach(file => {
+        if(state.files.length < 5){ state.files.push(file); }
+    });
+    if(input){ try{ input.value = ''; }catch(e){} }
+    renderUploadSelection(textId, inputId);
+    if(dialogId){ closeUploadChooser(dialogId); }
+    if(incoming.length > 0 && state.files.length >= 5){
+        const summary = textEl.querySelector('div');
+        if(summary){ summary.textContent = `已选择 ${state.files.length} 张（已达本次最多5张）`; }
+    }
+}
+
 function enableEdit(formId){
     const form = document.getElementById(formId);
     const fields = form.querySelectorAll('.edit-field');
@@ -4647,6 +4737,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .upload-actions{display:flex;gap:8px;flex-wrap:wrap;}
 .upload-actions button{width:auto;min-width:120px;}
 .file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
+.upload-preview-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}.upload-preview-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #e1e7ef;border-radius:10px;background:#fbfdff;color:#4d5b6b;}.upload-preview-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.upload-remove-btn{width:28px;min-width:28px;height:28px;padding:0;border-radius:999px;background:#dc2626;color:#fff;border:none;box-shadow:none;font-weight:900;line-height:1;display:inline-flex;align-items:center;justify-content:center;}
 .upload-dialog{position:fixed;left:0;top:0;width:100vw;height:100dvh;background:transparent;display:none;z-index:9999;overflow:hidden;} .upload-dialog.show{display:block;} .upload-dialog-card{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);width:min(320px,calc(100vw - 24px));max-width:320px;background:#fff;border-radius:16px;padding:18px;box-shadow:0 20px 40px rgba(15,23,42,.22);z-index:10000;}
 .upload-dialog-title{font-size:18px;font-weight:bold;margin-bottom:12px;text-align:center;color:#163047;}
 .upload-dialog-actions{display:flex;flex-direction:column;gap:10px;}
@@ -4741,32 +4832,102 @@ function confirmDeviceSave(form){
 
 function openUploadChooser(dialogId, triggerEl){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.add('show'); } }
 function closeUploadChooser(dialogId){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.remove('show'); } }
-function updateSelectedFiles(inputId, textId, dialogId){
-    const textEl = document.getElementById(textId);
-    if(!textEl){
-        return;
-    }
-
-    const inputIds = (textEl.dataset.inputs || inputId || '').split(',').map(item => item.trim()).filter(Boolean);
-    const files = [];
-    inputIds.forEach(id => {
-        const input = document.getElementById(id);
-        if(input && input.files){
-            Array.from(input.files).forEach(file => files.push(file));
-        }
-    });
-
-    if(files.length > 0){
-        const names = files.map(file => file.name).join('，');
-        textEl.textContent = `已选择 ${files.length} 张：${names}`;
-    }else{
-        textEl.textContent = '未选择图片';
-    }
-
-    if(dialogId){
-        closeUploadChooser(dialogId);
+const uploadSelectionState = window.uploadSelectionState || (window.uploadSelectionState = {});
+function getUploadInputIds(textEl, fallbackInputId){ return (textEl.dataset.inputs || fallbackInputId || '').split(',').map(item => item.trim()).filter(Boolean); }
+function makeShortUploadName(file){
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const timePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    const randomPart = Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(0, 6).padEnd(6, '0');
+    const originalName = file && file.name ? file.name : '';
+    const extMatch = originalName.match(/\\.([A-Za-z0-9]+)$/);
+    const ext = extMatch ? extMatch[1].toLowerCase() : 'jpg';
+    return `${timePart}_${randomPart}.${ext}`;
+}
+function cloneUploadFileWithShortName(file){
+    if(!file){ return file; }
+    try{
+        if(file.__shortUploadName){ return file; }
+        const newFile = new File([file], makeShortUploadName(file), { type: file.type || 'image/jpeg', lastModified: file.lastModified || Date.now() });
+        Object.defineProperty(newFile, '__shortUploadName', { value: true });
+        return newFile;
+    }catch(e){
+        return file;
     }
 }
+function syncUploadInputs(textId, activeInputId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || { files: [] };
+    const inputIds = getUploadInputIds(textEl, activeInputId);
+    if(typeof DataTransfer !== 'undefined'){
+        const transfer = new DataTransfer();
+        state.files.forEach(file => transfer.items.add(file));
+        inputIds.forEach((id, index) => {
+            const input = document.getElementById(id);
+            if(!input){ return; }
+            try{ input.files = (id === activeInputId || index === 0) ? transfer.files : new DataTransfer().files; }catch(e){}
+        });
+    }
+}
+function renderUploadSelection(textId, activeInputId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || { files: [] };
+    if(state.files.length <= 0){
+        textEl.textContent = '未选择图片';
+        syncUploadInputs(textId, activeInputId);
+        return;
+    }
+    textEl.innerHTML = '';
+    const summary = document.createElement('div');
+    summary.textContent = `已选择 ${state.files.length} 张（本次最多5张）`;
+    textEl.appendChild(summary);
+    const list = document.createElement('div');
+    list.className = 'upload-preview-list';
+    state.files.forEach((file, index) => {
+        const item = document.createElement('div');
+        item.className = 'upload-preview-item';
+        const name = document.createElement('span');
+        name.className = 'upload-preview-name';
+        name.textContent = file.name || `图片${index + 1}`;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'upload-remove-btn';
+        remove.setAttribute('aria-label', '删除该图片');
+        remove.textContent = '×';
+        remove.onclick = function(){ removeSelectedUploadFile(textId, index, activeInputId); };
+        item.appendChild(name);
+        item.appendChild(remove);
+        list.appendChild(item);
+    });
+    textEl.appendChild(list);
+    syncUploadInputs(textId, activeInputId);
+}
+function removeSelectedUploadFile(textId, index, activeInputId){
+    const state = uploadSelectionState[textId];
+    if(!state){ return; }
+    state.files.splice(index, 1);
+    renderUploadSelection(textId, activeInputId);
+}
+function updateSelectedFiles(inputId, textId, dialogId){
+    const input = document.getElementById(inputId);
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || (uploadSelectionState[textId] = { files: [] });
+    const incoming = input && input.files ? Array.from(input.files).map(cloneUploadFileWithShortName) : [];
+    incoming.forEach(file => {
+        if(state.files.length < 5){ state.files.push(file); }
+    });
+    if(input){ try{ input.value = ''; }catch(e){} }
+    renderUploadSelection(textId, inputId);
+    if(dialogId){ closeUploadChooser(dialogId); }
+    if(incoming.length > 0 && state.files.length >= 5){
+        const summary = textEl.querySelector('div');
+        if(summary){ summary.textContent = `已选择 ${state.files.length} 张（已达本次最多5张）`; }
+    }
+}
+
 </script>
 </head>
 <body>
@@ -4890,6 +5051,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .upload-actions{display:flex;gap:8px;flex-wrap:wrap;}
 .upload-actions button{width:auto;min-width:120px;}
 .file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
+.upload-preview-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}.upload-preview-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #e1e7ef;border-radius:10px;background:#fbfdff;color:#4d5b6b;}.upload-preview-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.upload-remove-btn{width:28px;min-width:28px;height:28px;padding:0;border-radius:999px;background:#dc2626;color:#fff;border:none;box-shadow:none;font-weight:900;line-height:1;display:inline-flex;align-items:center;justify-content:center;}
 .upload-dialog{position:fixed;left:0;top:0;width:100vw;height:100dvh;background:transparent;display:none;z-index:9999;overflow:hidden;} .upload-dialog.show{display:block;} .upload-dialog-card{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);width:min(320px,calc(100vw - 24px));max-width:320px;background:#fff;border-radius:16px;padding:18px;box-shadow:0 20px 40px rgba(15,23,42,.22);z-index:10000;}
 .upload-dialog-title{font-size:18px;font-weight:bold;margin-bottom:12px;text-align:center;color:#163047;}
 .upload-dialog-actions{display:flex;flex-direction:column;gap:10px;}
@@ -4960,7 +5122,102 @@ function beginEdit(formId, buttonId){ const form = document.getElementById(formI
 function handleEditOrSave(formId, buttonId){ const button = document.getElementById(buttonId); if(!button){ return false; } const mode = button.getAttribute('data-mode') || 'edit'; if(mode === 'save'){ const form = document.getElementById(formId); if(form){ if(form.requestSubmit){ form.requestSubmit(); } else { form.submit(); } } return false; } return beginEdit(formId, buttonId); }
 function openUploadChooser(dialogId, triggerEl){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.add('show'); } }
 function closeUploadChooser(dialogId){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.remove('show'); } }
-function updateSelectedFiles(inputId, textId, dialogId){ const textEl = document.getElementById(textId); if(!textEl){ return; } const inputIds = (textEl.dataset.inputs || inputId || '').split(',').map(item => item.trim()).filter(Boolean); const files = []; inputIds.forEach(id => { const input = document.getElementById(id); if(input && input.files){ Array.from(input.files).forEach(file => files.push(file)); } }); textEl.textContent = files.length > 0 ? `已选择 ${files.length} 张：${files.map(file => file.name).join('，')}` : '未选择图片'; if(dialogId){ closeUploadChooser(dialogId); } }
+const uploadSelectionState = window.uploadSelectionState || (window.uploadSelectionState = {});
+function getUploadInputIds(textEl, fallbackInputId){ return (textEl.dataset.inputs || fallbackInputId || '').split(',').map(item => item.trim()).filter(Boolean); }
+function makeShortUploadName(file){
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const timePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    const randomPart = Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(0, 6).padEnd(6, '0');
+    const originalName = file && file.name ? file.name : '';
+    const extMatch = originalName.match(/\\.([A-Za-z0-9]+)$/);
+    const ext = extMatch ? extMatch[1].toLowerCase() : 'jpg';
+    return `${timePart}_${randomPart}.${ext}`;
+}
+function cloneUploadFileWithShortName(file){
+    if(!file){ return file; }
+    try{
+        if(file.__shortUploadName){ return file; }
+        const newFile = new File([file], makeShortUploadName(file), { type: file.type || 'image/jpeg', lastModified: file.lastModified || Date.now() });
+        Object.defineProperty(newFile, '__shortUploadName', { value: true });
+        return newFile;
+    }catch(e){
+        return file;
+    }
+}
+function syncUploadInputs(textId, activeInputId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || { files: [] };
+    const inputIds = getUploadInputIds(textEl, activeInputId);
+    if(typeof DataTransfer !== 'undefined'){
+        const transfer = new DataTransfer();
+        state.files.forEach(file => transfer.items.add(file));
+        inputIds.forEach((id, index) => {
+            const input = document.getElementById(id);
+            if(!input){ return; }
+            try{ input.files = (id === activeInputId || index === 0) ? transfer.files : new DataTransfer().files; }catch(e){}
+        });
+    }
+}
+function renderUploadSelection(textId, activeInputId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || { files: [] };
+    if(state.files.length <= 0){
+        textEl.textContent = '未选择图片';
+        syncUploadInputs(textId, activeInputId);
+        return;
+    }
+    textEl.innerHTML = '';
+    const summary = document.createElement('div');
+    summary.textContent = `已选择 ${state.files.length} 张（本次最多5张）`;
+    textEl.appendChild(summary);
+    const list = document.createElement('div');
+    list.className = 'upload-preview-list';
+    state.files.forEach((file, index) => {
+        const item = document.createElement('div');
+        item.className = 'upload-preview-item';
+        const name = document.createElement('span');
+        name.className = 'upload-preview-name';
+        name.textContent = file.name || `图片${index + 1}`;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'upload-remove-btn';
+        remove.setAttribute('aria-label', '删除该图片');
+        remove.textContent = '×';
+        remove.onclick = function(){ removeSelectedUploadFile(textId, index, activeInputId); };
+        item.appendChild(name);
+        item.appendChild(remove);
+        list.appendChild(item);
+    });
+    textEl.appendChild(list);
+    syncUploadInputs(textId, activeInputId);
+}
+function removeSelectedUploadFile(textId, index, activeInputId){
+    const state = uploadSelectionState[textId];
+    if(!state){ return; }
+    state.files.splice(index, 1);
+    renderUploadSelection(textId, activeInputId);
+}
+function updateSelectedFiles(inputId, textId, dialogId){
+    const input = document.getElementById(inputId);
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || (uploadSelectionState[textId] = { files: [] });
+    const incoming = input && input.files ? Array.from(input.files).map(cloneUploadFileWithShortName) : [];
+    incoming.forEach(file => {
+        if(state.files.length < 5){ state.files.push(file); }
+    });
+    if(input){ try{ input.value = ''; }catch(e){} }
+    renderUploadSelection(textId, inputId);
+    if(dialogId){ closeUploadChooser(dialogId); }
+    if(incoming.length > 0 && state.files.length >= 5){
+        const summary = textEl.querySelector('div');
+        if(summary){ summary.textContent = `已选择 ${state.files.length} 张（已达本次最多5张）`; }
+    }
+}
+
 
 const deleteModalState = { onOk: null, onCancel: null };
 function closeDeleteModal(){
@@ -5214,6 +5471,7 @@ tbody tr:hover td{background:#eff3f7;}
 .upload-actions{display:flex;gap:8px;flex-wrap:wrap;}
 .upload-actions button{width:auto;min-width:120px;}
 .file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
+.upload-preview-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}.upload-preview-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #e1e7ef;border-radius:10px;background:#fbfdff;color:#4d5b6b;}.upload-preview-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.upload-remove-btn{width:28px;min-width:28px;height:28px;padding:0;border-radius:999px;background:#dc2626;color:#fff;border:none;box-shadow:none;font-weight:900;line-height:1;display:inline-flex;align-items:center;justify-content:center;}
 .upload-dialog{position:fixed;left:0;top:0;width:100vw;height:100dvh;background:transparent;display:none;z-index:9999;overflow:hidden;} .upload-dialog.show{display:block;} .upload-dialog-card{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);width:min(320px,calc(100vw - 24px));max-width:320px;background:#fff;border-radius:16px;padding:18px;box-shadow:0 20px 40px rgba(15,23,42,.22);z-index:10000;}
 .upload-dialog-title{font-size:18px;font-weight:bold;margin-bottom:12px;text-align:center;color:#163047;}
 .upload-dialog-actions{display:flex;flex-direction:column;gap:10px;}
@@ -5282,7 +5540,102 @@ tbody tr:hover td{background:#eff3f7;}
 function enableEdit(formId){ const form = document.getElementById(formId); const fields = form.querySelectorAll('.edit-field'); fields.forEach(el => { el.disabled = false; el.classList.remove('readonly'); }); document.getElementById(formId + '-save').style.display = 'inline-block'; document.getElementById(formId + '-edit').style.display = 'none'; }
 function openUploadChooser(dialogId, triggerEl){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.add('show'); } }
 function closeUploadChooser(dialogId){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.remove('show'); } }
-function updateSelectedFiles(inputId, textId, dialogId){ const textEl = document.getElementById(textId); if(!textEl){ return; } const inputIds = (textEl.dataset.inputs || inputId || '').split(',').map(item => item.trim()).filter(Boolean); const files = []; inputIds.forEach(id => { const input = document.getElementById(id); if(input && input.files){ Array.from(input.files).forEach(file => files.push(file)); } }); textEl.textContent = files.length > 0 ? `已选择 ${files.length} 张：${files.map(file => file.name).join('，')}` : '未选择图片'; if(dialogId){ closeUploadChooser(dialogId); } }
+const uploadSelectionState = window.uploadSelectionState || (window.uploadSelectionState = {});
+function getUploadInputIds(textEl, fallbackInputId){ return (textEl.dataset.inputs || fallbackInputId || '').split(',').map(item => item.trim()).filter(Boolean); }
+function makeShortUploadName(file){
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const timePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    const randomPart = Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(0, 6).padEnd(6, '0');
+    const originalName = file && file.name ? file.name : '';
+    const extMatch = originalName.match(/\\.([A-Za-z0-9]+)$/);
+    const ext = extMatch ? extMatch[1].toLowerCase() : 'jpg';
+    return `${timePart}_${randomPart}.${ext}`;
+}
+function cloneUploadFileWithShortName(file){
+    if(!file){ return file; }
+    try{
+        if(file.__shortUploadName){ return file; }
+        const newFile = new File([file], makeShortUploadName(file), { type: file.type || 'image/jpeg', lastModified: file.lastModified || Date.now() });
+        Object.defineProperty(newFile, '__shortUploadName', { value: true });
+        return newFile;
+    }catch(e){
+        return file;
+    }
+}
+function syncUploadInputs(textId, activeInputId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || { files: [] };
+    const inputIds = getUploadInputIds(textEl, activeInputId);
+    if(typeof DataTransfer !== 'undefined'){
+        const transfer = new DataTransfer();
+        state.files.forEach(file => transfer.items.add(file));
+        inputIds.forEach((id, index) => {
+            const input = document.getElementById(id);
+            if(!input){ return; }
+            try{ input.files = (id === activeInputId || index === 0) ? transfer.files : new DataTransfer().files; }catch(e){}
+        });
+    }
+}
+function renderUploadSelection(textId, activeInputId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || { files: [] };
+    if(state.files.length <= 0){
+        textEl.textContent = '未选择图片';
+        syncUploadInputs(textId, activeInputId);
+        return;
+    }
+    textEl.innerHTML = '';
+    const summary = document.createElement('div');
+    summary.textContent = `已选择 ${state.files.length} 张（本次最多5张）`;
+    textEl.appendChild(summary);
+    const list = document.createElement('div');
+    list.className = 'upload-preview-list';
+    state.files.forEach((file, index) => {
+        const item = document.createElement('div');
+        item.className = 'upload-preview-item';
+        const name = document.createElement('span');
+        name.className = 'upload-preview-name';
+        name.textContent = file.name || `图片${index + 1}`;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'upload-remove-btn';
+        remove.setAttribute('aria-label', '删除该图片');
+        remove.textContent = '×';
+        remove.onclick = function(){ removeSelectedUploadFile(textId, index, activeInputId); };
+        item.appendChild(name);
+        item.appendChild(remove);
+        list.appendChild(item);
+    });
+    textEl.appendChild(list);
+    syncUploadInputs(textId, activeInputId);
+}
+function removeSelectedUploadFile(textId, index, activeInputId){
+    const state = uploadSelectionState[textId];
+    if(!state){ return; }
+    state.files.splice(index, 1);
+    renderUploadSelection(textId, activeInputId);
+}
+function updateSelectedFiles(inputId, textId, dialogId){
+    const input = document.getElementById(inputId);
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || (uploadSelectionState[textId] = { files: [] });
+    const incoming = input && input.files ? Array.from(input.files).map(cloneUploadFileWithShortName) : [];
+    incoming.forEach(file => {
+        if(state.files.length < 5){ state.files.push(file); }
+    });
+    if(input){ try{ input.value = ''; }catch(e){} }
+    renderUploadSelection(textId, inputId);
+    if(dialogId){ closeUploadChooser(dialogId); }
+    if(incoming.length > 0 && state.files.length >= 5){
+        const summary = textEl.querySelector('div');
+        if(summary){ summary.textContent = `已选择 ${state.files.length} 张（已达本次最多5张）`; }
+    }
+}
+
 function confirmAccessorySave(){ return confirm('确认保存吗？'); }
 function beginEdit(formId, buttonId){ const form = document.getElementById(formId); if(!form){ return false; } const fields = form.querySelectorAll('.edit-field'); fields.forEach(el => { el.disabled = false; el.classList.remove('readonly'); }); const button = document.getElementById(buttonId); if(button){ button.textContent = '确认'; button.setAttribute('data-mode', 'save'); } return false; }
 function handleEditOrSave(formId, buttonId){ const button = document.getElementById(buttonId); if(!button){ return false; } const mode = button.getAttribute('data-mode') || 'edit'; if(mode === 'save'){ const form = document.getElementById(formId); if(form){ if(form.requestSubmit){ form.requestSubmit(); } else { form.submit(); } } return false; } return beginEdit(formId, buttonId); }
