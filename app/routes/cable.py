@@ -9,7 +9,7 @@ import uuid
 from flask import request, redirect, url_for, render_template_string, send_file, session
 from flask_login import current_user
 from openpyxl import Workbook, load_workbook
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 
 from app import db
 from config import Config
@@ -106,11 +106,21 @@ def normalize_location(value):
     if not value:
         return ""
 
-    tuple_match = re.fullmatch(r"\(\s*['\"](.+?)['\"]\s*,\s*\)", value)
+    tuple_match = re.fullmatch(r"\(\s*[\'\"](.+?)[\'\"]\s*,\s*\)", value)
     if tuple_match:
         value = normalize_text(tuple_match.group(1))
 
-    return value
+    return value.upper()
+
+
+def location_equals(column, value):
+    value = normalize_location(value)
+    return func.upper(column) == value
+
+
+def location_like(column, value):
+    value = normalize_location(value)
+    return func.upper(column).like(f"%{value}%")
 
 
 def is_virtual_empty_cable_no(value):
@@ -298,14 +308,14 @@ def get_shelf_by_location(location):
     location = normalize_location(location)
     if not location:
         return None
-    return CableShelf.query.filter_by(shelf_name=location).first()
+    return CableShelf.query.filter(location_equals(CableShelf.shelf_name, location)).first()
 
 
 def ensure_shelf(location, auto_create=False):
     location = normalize_location(location)
     if not location:
         return None
-    shelf = CableShelf.query.filter_by(shelf_name=location).first()
+    shelf = CableShelf.query.filter(location_equals(CableShelf.shelf_name, location)).first()
     if shelf or not auto_create:
         return shelf
     shelf = CableShelf(shelf_name=location)
@@ -331,7 +341,7 @@ def build_location_shelf_lookup(locations):
     normalized_locations = [normalize_location(item) for item in locations if normalize_location(item)]
     if not normalized_locations:
         return {}
-    shelves = CableShelf.query.filter(CableShelf.shelf_name.in_(normalized_locations)).all()
+    shelves = CableShelf.query.filter(func.upper(CableShelf.shelf_name).in_(normalized_locations)).all()
     return {normalize_location(item.shelf_name): item for item in shelves}
 
 
@@ -418,7 +428,7 @@ def build_cable_rows(keyword="", searched=False):
             or_(
                 Cable.cable_no.like(f"%{keyword}%"),
                 Cable.owner.like(f"%{keyword}%"),
-                Cable.location.like(f"%{keyword}%"),
+                location_like(Cable.location, keyword),
                 Cable.remark.like(f"%{keyword}%"),
             )
         )
@@ -455,7 +465,7 @@ def build_cable_rows(keyword="", searched=False):
     if keyword:
         shelf_query = shelf_query.filter(
             or_(
-                CableShelf.shelf_name.like(f"%{keyword}%"),
+                location_like(CableShelf.shelf_name, keyword),
                 CableShelf.remark.like(f"%{keyword}%")
             )
         )
@@ -492,7 +502,7 @@ def import_cables_from_excel(file_storage):
         name = normalize_text(row[1] if len(row) > 1 else "")
         spec = normalize_text(row[2] if len(row) > 2 else "")
         owner = normalize_text(row[3] if len(row) > 3 else "")
-        location = normalize_text(row[4] if len(row) > 4 else "")
+        location = normalize_location(row[4] if len(row) > 4 else "")
         status = normalize_cable_status(row[5] if len(row) > 5 else "")
         remark = normalize_text(row[6] if len(row) > 6 else "")
 
@@ -712,7 +722,7 @@ function confirmDeleteSelected(){
                 {% if can_manage %}<a href="/cable/new{% if prefill_cable_no %}?cable_no={{ prefill_cable_no|urlencode }}{% endif %}"><button type="button" class="btn-add-home">+</button></a>{% else %}<button type="button" class="btn-disabled" disabled>+</button>{% endif %}
             </div>
         </form>
-        <form method="post" action="/cable/import" enctype="multipart/form-data" style="margin-top:12px;"><div class="action-bar"><input type="file" name="excel_file" accept=".xlsx,.xlsm,.xltx,.xltm" {% if not can_manage %}disabled{% endif %}><button type="submit" class="btn-orange {% if not can_manage %}btn-disabled{% endif %}" {% if not can_manage %}disabled{% endif %}>批量上传电缆</button></div><div class="muted" style="margin-top:8px;">Excel导入格式与导出一致</div></form>
+        <form method="post" action="/cable/import" enctype="multipart/form-data" style="margin-top:12px;"><div class="action-bar"><input type="file" name="excel_file" accept=".xlsx,.xlsm,.xltx,.xltm" {% if not can_manage %}disabled{% endif %}><button type="submit" class="btn-orange {% if not can_manage %}btn-disabled{% endif %}" {% if not can_manage %}disabled{% endif %}>批量上传电缆</button></div><div class="muted" style="margin-top:8px;">Excel导入、导出格式一致，导入操作只更新，不会空白填充。</div></form>
         {% if error %}<div class="err">{{ error }}</div>{% endif %}
     </div>
     {% if searched %}
@@ -802,6 +812,11 @@ tbody tr:hover td{background:#eff3f7;}
 .upload-actions{display:flex;gap:8px;flex-wrap:wrap;}
 .upload-actions button{width:auto;min-width:120px;}
 .file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
+.selected-file-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}
+.selected-file-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:#fff;border:1px solid #e0e7ef;border-radius:10px;color:#506172;line-height:1.35;}
+.selected-file-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.selected-file-remove{width:28px;min-width:28px;height:28px;padding:0;border:none;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:#dc2626;color:#fff;font-size:20px;font-weight:800;line-height:1;box-shadow:0 4px 10px rgba(220,38,38,.18);}
+.selected-file-remove:hover{background:#b91c1c;transform:none;}
 .upload-dialog{position:fixed;left:0;top:0;width:100vw;height:100dvh;background:transparent;display:none;z-index:9999;overflow:hidden;} .upload-dialog.show{display:block;} .upload-dialog-card{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);width:min(320px,calc(100vw - 24px));max-width:320px;background:#fff;border-radius:16px;padding:18px;box-shadow:0 20px 40px rgba(15,23,42,.22);z-index:10000;}
 .upload-dialog-title{font-size:18px;font-weight:bold;margin-bottom:12px;text-align:center;color:#163047;}
 .upload-dialog-actions{display:flex;flex-direction:column;gap:10px;}
@@ -844,23 +859,78 @@ tbody tr:hover td{background:#eff3f7;}
 <script>
 function openUploadChooser(dialogId, triggerEl){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.add('show'); } }
 function closeUploadChooser(dialogId){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.remove('show'); } }
+
+const uploadFileQueues = {};
+function makeShortLocalImageName(file){
+    const now = new Date();
+    const pad = value => String(value).padStart(2, '0');
+    const ms = String(now.getMilliseconds()).padStart(3, '0');
+    const timePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${ms}`;
+    const originalName = file && file.name ? file.name : '';
+    const extMatch = originalName.match(/[.]([A-Za-z0-9]+)$/);
+    const ext = extMatch ? extMatch[1].toLowerCase() : ((file.type || '').split('/')[1] || 'jpg').toLowerCase();
+    try{
+        return new File([file], `${timePart}.${ext}`, {type: file.type || 'image/jpeg', lastModified: file.lastModified || Date.now()});
+    }catch(e){
+        return file;
+    }
+}
+function syncQueuedFilesToInput(textEl, inputIds){
+    const dt = new DataTransfer();
+    (uploadFileQueues[textEl.id] || []).forEach(file => dt.items.add(file));
+    inputIds.forEach((id, index) => {
+        const input = document.getElementById(id);
+        if(!input){ return; }
+        input.files = index === 0 ? dt.files : new DataTransfer().files;
+        input.value = '';
+    });
+}
+function renderQueuedFiles(textEl, inputIds){
+    const queue = uploadFileQueues[textEl.id] || [];
+    if(queue.length === 0){
+        textEl.textContent = '未选择图片';
+        return;
+    }
+    textEl.innerHTML = `<div>已选择 ${queue.length} 张（最多5张）：</div><div class="selected-file-list"></div>`;
+    const list = textEl.querySelector('.selected-file-list');
+    queue.forEach((file, index) => {
+        const row = document.createElement('div');
+        row.className = 'selected-file-item';
+        const name = document.createElement('span');
+        name.className = 'selected-file-name';
+        name.textContent = file.name || `图片${index + 1}`;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'selected-file-remove';
+        remove.textContent = '×';
+        remove.setAttribute('aria-label', '删除该图片');
+        remove.onclick = function(){
+            uploadFileQueues[textEl.id].splice(index, 1);
+            syncQueuedFilesToInput(textEl, inputIds);
+            renderQueuedFiles(textEl, inputIds);
+        };
+        row.appendChild(name);
+        row.appendChild(remove);
+        list.appendChild(row);
+    });
+}
 function updateSelectedFiles(inputId, textId, dialogId){
     const textEl = document.getElementById(textId);
     if(!textEl){ return; }
     const inputIds = (textEl.dataset.inputs || inputId || '').split(',').map(item => item.trim()).filter(Boolean);
-    const files = [];
-    inputIds.forEach(id => {
-        const input = document.getElementById(id);
-        if(input && input.files){
-            Array.from(input.files).forEach(file => files.push(file));
+    if(!uploadFileQueues[textId]){ uploadFileQueues[textId] = []; }
+    const input = document.getElementById(inputId);
+    const incoming = input && input.files ? Array.from(input.files) : [];
+    incoming.forEach(file => {
+        if(uploadFileQueues[textId].length < 5){
+            uploadFileQueues[textId].push(makeShortLocalImageName(file));
         }
     });
-    if(files.length > 0){
-        const names = files.map(file => file.name).join('，');
-        textEl.textContent = `已选择 ${files.length} 张：${names}`;
-    }else{
-        textEl.textContent = '未选择图片';
+    if(incoming.length > 0 && uploadFileQueues[textId].length >= 5 && incoming.length > 5){
+        alert('本次最多上传5张图片');
     }
+    syncQueuedFilesToInput(textEl, inputIds);
+    renderQueuedFiles(textEl, inputIds);
     if(dialogId){ closeUploadChooser(dialogId); }
 }
 </script>
@@ -992,6 +1062,11 @@ tbody tr:hover td{background:#eff3f7;}
 .upload-actions{display:flex;gap:8px;flex-wrap:wrap;}
 .upload-actions button{width:auto;min-width:120px;}
 .file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
+.selected-file-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}
+.selected-file-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:#fff;border:1px solid #e0e7ef;border-radius:10px;color:#506172;line-height:1.35;}
+.selected-file-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.selected-file-remove{width:28px;min-width:28px;height:28px;padding:0;border:none;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:#dc2626;color:#fff;font-size:20px;font-weight:800;line-height:1;box-shadow:0 4px 10px rgba(220,38,38,.18);}
+.selected-file-remove:hover{background:#b91c1c;transform:none;}
 .upload-dialog{position:fixed;left:0;top:0;width:100vw;height:100dvh;background:transparent;display:none;z-index:9999;overflow:hidden;} .upload-dialog.show{display:block;} .upload-dialog-card{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);width:min(320px,calc(100vw - 24px));max-width:320px;background:#fff;border-radius:16px;padding:18px;box-shadow:0 20px 40px rgba(15,23,42,.22);z-index:10000;}
 .upload-dialog-title{font-size:18px;font-weight:bold;margin-bottom:12px;text-align:center;color:#163047;}
 .upload-dialog-actions{display:flex;flex-direction:column;gap:10px;}
@@ -1034,7 +1109,80 @@ tbody tr:hover td{background:#eff3f7;}
 <script>
 function openUploadChooser(dialogId, triggerEl){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.add('show'); } }
 function closeUploadChooser(dialogId){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.remove('show'); } }
-function updateSelectedFiles(inputId, textId, dialogId){ const textEl = document.getElementById(textId); if(!textEl){ return; } const inputIds = (textEl.dataset.inputs || inputId || '').split(',').map(item => item.trim()).filter(Boolean); const files = []; inputIds.forEach(id => { const input = document.getElementById(id); if(input && input.files){ Array.from(input.files).forEach(file => files.push(file)); } }); textEl.textContent = files.length > 0 ? `已选择 ${files.length} 张：${files.map(file => file.name).join('，')}` : '未选择图片'; if(dialogId){ closeUploadChooser(dialogId); } }
+
+const uploadFileQueues = {};
+function makeShortLocalImageName(file){
+    const now = new Date();
+    const pad = value => String(value).padStart(2, '0');
+    const ms = String(now.getMilliseconds()).padStart(3, '0');
+    const timePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${ms}`;
+    const originalName = file && file.name ? file.name : '';
+    const extMatch = originalName.match(/[.]([A-Za-z0-9]+)$/);
+    const ext = extMatch ? extMatch[1].toLowerCase() : ((file.type || '').split('/')[1] || 'jpg').toLowerCase();
+    try{
+        return new File([file], `${timePart}.${ext}`, {type: file.type || 'image/jpeg', lastModified: file.lastModified || Date.now()});
+    }catch(e){
+        return file;
+    }
+}
+function syncQueuedFilesToInput(textEl, inputIds){
+    const dt = new DataTransfer();
+    (uploadFileQueues[textEl.id] || []).forEach(file => dt.items.add(file));
+    inputIds.forEach((id, index) => {
+        const input = document.getElementById(id);
+        if(!input){ return; }
+        input.files = index === 0 ? dt.files : new DataTransfer().files;
+        input.value = '';
+    });
+}
+function renderQueuedFiles(textEl, inputIds){
+    const queue = uploadFileQueues[textEl.id] || [];
+    if(queue.length === 0){
+        textEl.textContent = '未选择图片';
+        return;
+    }
+    textEl.innerHTML = `<div>已选择 ${queue.length} 张（最多5张）：</div><div class="selected-file-list"></div>`;
+    const list = textEl.querySelector('.selected-file-list');
+    queue.forEach((file, index) => {
+        const row = document.createElement('div');
+        row.className = 'selected-file-item';
+        const name = document.createElement('span');
+        name.className = 'selected-file-name';
+        name.textContent = file.name || `图片${index + 1}`;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'selected-file-remove';
+        remove.textContent = '×';
+        remove.setAttribute('aria-label', '删除该图片');
+        remove.onclick = function(){
+            uploadFileQueues[textEl.id].splice(index, 1);
+            syncQueuedFilesToInput(textEl, inputIds);
+            renderQueuedFiles(textEl, inputIds);
+        };
+        row.appendChild(name);
+        row.appendChild(remove);
+        list.appendChild(row);
+    });
+}
+function updateSelectedFiles(inputId, textId, dialogId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const inputIds = (textEl.dataset.inputs || inputId || '').split(',').map(item => item.trim()).filter(Boolean);
+    if(!uploadFileQueues[textId]){ uploadFileQueues[textId] = []; }
+    const input = document.getElementById(inputId);
+    const incoming = input && input.files ? Array.from(input.files) : [];
+    incoming.forEach(file => {
+        if(uploadFileQueues[textId].length < 5){
+            uploadFileQueues[textId].push(makeShortLocalImageName(file));
+        }
+    });
+    if(incoming.length > 0 && uploadFileQueues[textId].length >= 5 && incoming.length > 5){
+        alert('本次最多上传5张图片');
+    }
+    syncQueuedFilesToInput(textEl, inputIds);
+    renderQueuedFiles(textEl, inputIds);
+    if(dialogId){ closeUploadChooser(dialogId); }
+}
 function beginEdit(formId, buttonId){ const form = document.getElementById(formId); if(!form){ return false; } const fields = form.querySelectorAll('.edit-field'); fields.forEach(el => { el.disabled = false; el.classList.remove('readonly'); }); const button = document.getElementById(buttonId); if(button){ button.textContent = '确认'; button.setAttribute('data-mode', 'save'); } return false; }
 function handleEditOrSave(formId, buttonId){ const button = document.getElementById(buttonId); if(!button){ return false; } const mode = button.getAttribute('data-mode') || 'edit'; if(mode === 'save'){ const form = document.getElementById(formId); if(form){ if(form.requestSubmit){ form.requestSubmit(); } else { form.submit(); } } return false; } return beginEdit(formId, buttonId); }
 
@@ -1229,7 +1377,12 @@ button:disabled{cursor:not-allowed;transform:none;box-shadow:none;}
 .readonly{background:#eef2f6;color:#677383;border-color:#d8e0e8;}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
 .table-wrap{overflow-x:auto;border:1px solid #d7dee7;border-radius:16px;background:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.8),0 8px 22px rgba(27,39,53,.04);}
-table{width:100%;border-collapse:separate;border-spacing:0;min-width:780px;}th,td{padding:11px 10px;text-align:left;border:none;border-right:1px solid #e7eef7;border-bottom:1px solid #e7eef7;vertical-align:middle;font-size:15px;font-weight:400;color:#6f7b88;}th:last-child,td:last-child{border-right:none;}thead th{background:linear-gradient(180deg,#fafbfd 0%,#eff2f6 100%);color:#5e6977;font-weight:600;white-space:nowrap;}tbody tr:last-child td{border-bottom:none;}tbody tr:nth-child(odd) td{background:#fbfcfd;}tbody tr:nth-child(even) td{background:#f8fafb;}tbody tr:hover td{background:#eff3f7;}.msg{color:#15803d;margin-bottom:12px;font-weight:700;background:#eef8f3;border:1px solid #cfe4d9;border-radius:12px;padding:10px 12px;}.err{color:#dc2626;margin-bottom:12px;font-weight:700;background:#fbf1f2;border:1px solid #e7cfd3;border-radius:12px;padding:10px 12px;}.image-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;padding:10px 12px;background:#fafbfd;border:1px solid #dde4ec;border-radius:12px;}.upload-actions{display:flex;gap:8px;flex-wrap:wrap;}.upload-actions button{width:auto;min-width:120px;}.file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}.upload-dialog{position:fixed;left:0;top:0;width:100vw;height:100dvh;background:transparent;display:none;z-index:9999;overflow:hidden;} .upload-dialog.show{display:block;} .upload-dialog-card{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);width:min(320px,calc(100vw - 24px));max-width:320px;background:#fff;border-radius:16px;padding:18px;box-shadow:0 20px 40px rgba(15,23,42,.22);z-index:10000;}.upload-dialog-title{font-size:18px;font-weight:bold;margin-bottom:12px;text-align:center;color:#163047;}.upload-dialog-actions{display:flex;flex-direction:column;gap:10px;}.upload-dialog-actions button{width:100%;}.upload-choice-file{position:relative;display:block;width:100%;box-sizing:border-box;padding:10px;font-size:16px;border-radius:12px;border:1px solid #cfd9e6;background:linear-gradient(135deg,#718194 0%,#556274 100%);color:#fff;text-align:center;overflow:hidden;box-shadow:0 8px 18px rgba(46,58,74,.14);}.upload-choice-file input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;}.upload-dialog-actions .btn-cancel{background:linear-gradient(135deg,#7b8794 0%,#5f6b77 100%);}.shelf-cable-table{table-layout:fixed;min-width:920px;}.shelf-cable-table th:nth-child(1),.shelf-cable-table td:nth-child(1){width:15%;min-width:138px;}.shelf-cable-table th:nth-child(2),.shelf-cable-table td:nth-child(2){width:16%;}.shelf-cable-table th:nth-child(3),.shelf-cable-table td:nth-child(3){width:10%;}.shelf-cable-table th:nth-child(4),.shelf-cable-table td:nth-child(4){width:10%;}.shelf-cable-table th:nth-child(5),.shelf-cable-table td:nth-child(5){width:8%;}.shelf-cable-table th:nth-child(1),.shelf-cable-table td:nth-child(1),.shelf-cable-table th:nth-child(2),.shelf-cable-table td:nth-child(2){white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.title-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:nowrap;margin-bottom:14px;}
+table{width:100%;border-collapse:separate;border-spacing:0;min-width:780px;}th,td{padding:11px 10px;text-align:left;border:none;border-right:1px solid #e7eef7;border-bottom:1px solid #e7eef7;vertical-align:middle;font-size:15px;font-weight:400;color:#6f7b88;}th:last-child,td:last-child{border-right:none;}thead th{background:linear-gradient(180deg,#fafbfd 0%,#eff2f6 100%);color:#5e6977;font-weight:600;white-space:nowrap;}tbody tr:last-child td{border-bottom:none;}tbody tr:nth-child(odd) td{background:#fbfcfd;}tbody tr:nth-child(even) td{background:#f8fafb;}tbody tr:hover td{background:#eff3f7;}.msg{color:#15803d;margin-bottom:12px;font-weight:700;background:#eef8f3;border:1px solid #cfe4d9;border-radius:12px;padding:10px 12px;}.err{color:#dc2626;margin-bottom:12px;font-weight:700;background:#fbf1f2;border:1px solid #e7cfd3;border-radius:12px;padding:10px 12px;}.image-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;padding:10px 12px;background:#fafbfd;border:1px solid #dde4ec;border-radius:12px;}.upload-actions{display:flex;gap:8px;flex-wrap:wrap;}.upload-actions button{width:auto;min-width:120px;}.file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
+.selected-file-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}
+.selected-file-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:#fff;border:1px solid #e0e7ef;border-radius:10px;color:#506172;line-height:1.35;}
+.selected-file-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.selected-file-remove{width:28px;min-width:28px;height:28px;padding:0;border:none;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:#dc2626;color:#fff;font-size:20px;font-weight:800;line-height:1;box-shadow:0 4px 10px rgba(220,38,38,.18);}
+.selected-file-remove:hover{background:#b91c1c;transform:none;}.upload-dialog{position:fixed;left:0;top:0;width:100vw;height:100dvh;background:transparent;display:none;z-index:9999;overflow:hidden;} .upload-dialog.show{display:block;} .upload-dialog-card{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);width:min(320px,calc(100vw - 24px));max-width:320px;background:#fff;border-radius:16px;padding:18px;box-shadow:0 20px 40px rgba(15,23,42,.22);z-index:10000;}.upload-dialog-title{font-size:18px;font-weight:bold;margin-bottom:12px;text-align:center;color:#163047;}.upload-dialog-actions{display:flex;flex-direction:column;gap:10px;}.upload-dialog-actions button{width:100%;}.upload-choice-file{position:relative;display:block;width:100%;box-sizing:border-box;padding:10px;font-size:16px;border-radius:12px;border:1px solid #cfd9e6;background:linear-gradient(135deg,#718194 0%,#556274 100%);color:#fff;text-align:center;overflow:hidden;box-shadow:0 8px 18px rgba(46,58,74,.14);}.upload-choice-file input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;}.upload-dialog-actions .btn-cancel{background:linear-gradient(135deg,#7b8794 0%,#5f6b77 100%);}.shelf-cable-table{table-layout:fixed;min-width:920px;}.shelf-cable-table th:nth-child(1),.shelf-cable-table td:nth-child(1){width:15%;min-width:138px;}.shelf-cable-table th:nth-child(2),.shelf-cable-table td:nth-child(2){width:16%;}.shelf-cable-table th:nth-child(3),.shelf-cable-table td:nth-child(3){width:10%;}.shelf-cable-table th:nth-child(4),.shelf-cable-table td:nth-child(4){width:10%;}.shelf-cable-table th:nth-child(5),.shelf-cable-table td:nth-child(5){width:8%;}.shelf-cable-table th:nth-child(1),.shelf-cable-table td:nth-child(1),.shelf-cable-table th:nth-child(2),.shelf-cable-table td:nth-child(2){white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.title-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:nowrap;margin-bottom:14px;}
 .title-row h2{margin:0;}
 .title-row .btn-back{width:auto;min-width:108px;flex:0 0 auto;}
 .detail-actions{display:flex;gap:82px;flex-wrap:wrap;align-items:center;margin-top:12px;}
@@ -1264,7 +1417,80 @@ table{width:100%;border-collapse:separate;border-spacing:0;min-width:780px;}th,t
 <script>
 function openUploadChooser(dialogId, triggerEl){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.add('show'); } }
 function closeUploadChooser(dialogId){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.remove('show'); } }
-function updateSelectedFiles(inputId, textId, dialogId){ const textEl = document.getElementById(textId); if(!textEl){ return; } const inputIds = (textEl.dataset.inputs || inputId || '').split(',').map(item => item.trim()).filter(Boolean); const files = []; inputIds.forEach(id => { const input = document.getElementById(id); if(input && input.files){ Array.from(input.files).forEach(file => files.push(file)); } }); textEl.textContent = files.length > 0 ? `已选择 ${files.length} 张：${files.map(file => file.name).join('，')}` : '未选择图片'; if(dialogId){ closeUploadChooser(dialogId); } }
+
+const uploadFileQueues = {};
+function makeShortLocalImageName(file){
+    const now = new Date();
+    const pad = value => String(value).padStart(2, '0');
+    const ms = String(now.getMilliseconds()).padStart(3, '0');
+    const timePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${ms}`;
+    const originalName = file && file.name ? file.name : '';
+    const extMatch = originalName.match(/[.]([A-Za-z0-9]+)$/);
+    const ext = extMatch ? extMatch[1].toLowerCase() : ((file.type || '').split('/')[1] || 'jpg').toLowerCase();
+    try{
+        return new File([file], `${timePart}.${ext}`, {type: file.type || 'image/jpeg', lastModified: file.lastModified || Date.now()});
+    }catch(e){
+        return file;
+    }
+}
+function syncQueuedFilesToInput(textEl, inputIds){
+    const dt = new DataTransfer();
+    (uploadFileQueues[textEl.id] || []).forEach(file => dt.items.add(file));
+    inputIds.forEach((id, index) => {
+        const input = document.getElementById(id);
+        if(!input){ return; }
+        input.files = index === 0 ? dt.files : new DataTransfer().files;
+        input.value = '';
+    });
+}
+function renderQueuedFiles(textEl, inputIds){
+    const queue = uploadFileQueues[textEl.id] || [];
+    if(queue.length === 0){
+        textEl.textContent = '未选择图片';
+        return;
+    }
+    textEl.innerHTML = `<div>已选择 ${queue.length} 张（最多5张）：</div><div class="selected-file-list"></div>`;
+    const list = textEl.querySelector('.selected-file-list');
+    queue.forEach((file, index) => {
+        const row = document.createElement('div');
+        row.className = 'selected-file-item';
+        const name = document.createElement('span');
+        name.className = 'selected-file-name';
+        name.textContent = file.name || `图片${index + 1}`;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'selected-file-remove';
+        remove.textContent = '×';
+        remove.setAttribute('aria-label', '删除该图片');
+        remove.onclick = function(){
+            uploadFileQueues[textEl.id].splice(index, 1);
+            syncQueuedFilesToInput(textEl, inputIds);
+            renderQueuedFiles(textEl, inputIds);
+        };
+        row.appendChild(name);
+        row.appendChild(remove);
+        list.appendChild(row);
+    });
+}
+function updateSelectedFiles(inputId, textId, dialogId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const inputIds = (textEl.dataset.inputs || inputId || '').split(',').map(item => item.trim()).filter(Boolean);
+    if(!uploadFileQueues[textId]){ uploadFileQueues[textId] = []; }
+    const input = document.getElementById(inputId);
+    const incoming = input && input.files ? Array.from(input.files) : [];
+    incoming.forEach(file => {
+        if(uploadFileQueues[textId].length < 5){
+            uploadFileQueues[textId].push(makeShortLocalImageName(file));
+        }
+    });
+    if(incoming.length > 0 && uploadFileQueues[textId].length >= 5 && incoming.length > 5){
+        alert('本次最多上传5张图片');
+    }
+    syncQueuedFilesToInput(textEl, inputIds);
+    renderQueuedFiles(textEl, inputIds);
+    if(dialogId){ closeUploadChooser(dialogId); }
+}
 function enableEdit(formId){ const form = document.getElementById(formId); const fields = form.querySelectorAll('.edit-field'); fields.forEach(el => { el.disabled = false; el.classList.remove('readonly'); }); document.getElementById(formId + '-save').style.display = 'inline-block'; document.getElementById(formId + '-edit').style.display = 'none'; }
 </script>
 </head>
@@ -1573,7 +1799,7 @@ def register_cable_routes(app):
                     db.session.flush()
 
                     image_prefix = build_cable_filename_prefix(stored_cable_no, name, obj.location)
-                    for file_storage in image_files:
+                    for file_storage in image_files[:5]:
                         rel = save_uploaded_image(file_storage, "cable", image_prefix)
                         if rel:
                             db.session.add(CableImage(cable_id=obj.id, image_path=rel))
@@ -1614,7 +1840,7 @@ def register_cable_routes(app):
             if not location:
                 error = "货架位置不能为空"
             else:
-                existing = CableShelf.query.filter(CableShelf.shelf_name == location, CableShelf.id != shelf.id).first()
+                existing = CableShelf.query.filter(location_equals(CableShelf.shelf_name, location), CableShelf.id != shelf.id).first()
                 if existing:
                     error = "该货架位置已存在"
                 else:
@@ -1624,7 +1850,7 @@ def register_cable_routes(app):
                         shelf.remark = normalize_empty_to_none(remark)
 
                         if old_location != location:
-                            Cable.query.filter_by(location=old_location).update({"location": location}, synchronize_session=False)
+                            Cable.query.filter(location_equals(Cable.location, old_location)).update({"location": location}, synchronize_session=False)
 
                         for image_id in delete_image_ids:
                             try:
@@ -1636,7 +1862,7 @@ def register_cable_routes(app):
                                 delete_image_file(img.image_path)
                                 db.session.delete(img)
 
-                        for file_storage in image_files:
+                        for file_storage in image_files[:5]:
                             rel = save_uploaded_image(file_storage, "cable_shelf", shelf.shelf_name)
                             if rel:
                                 db.session.add(CableShelfImage(shelf_id=shelf.id, image_path=rel))
@@ -1650,7 +1876,7 @@ def register_cable_routes(app):
 
         images = get_shelf_images(shelf.id)
         cable_rows = []
-        for item in Cable.query.filter_by(location=shelf.shelf_name).order_by(Cable.cable_no.asc(), Cable.id.asc()).all():
+        for item in Cable.query.filter(location_equals(Cable.location, shelf.shelf_name)).order_by(Cable.cable_no.asc(), Cable.id.asc()).all():
             cable_rows.append({
                 "id": item.id,
                 "cable_no": get_display_cable_no(item.cable_no),
@@ -1736,7 +1962,7 @@ def register_cable_routes(app):
                                 db.session.delete(img)
 
                         image_prefix = build_cable_filename_prefix(cable.cable_no, cable.name, cable.location)
-                        for file_storage in image_files:
+                        for file_storage in image_files[:5]:
                             rel = save_uploaded_image(file_storage, "cable", image_prefix)
                             if rel:
                                 db.session.add(CableImage(cable_id=cable.id, image_path=rel))

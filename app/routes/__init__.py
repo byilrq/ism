@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from flask import request, redirect, url_for, render_template, render_template_string, send_file, send_from_directory, abort, jsonify, session
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import check_password_hash
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 from openpyxl import Workbook, load_workbook
 
 from app import db
@@ -116,11 +116,21 @@ def normalize_location(value):
     if not value:
         return ""
 
-    tuple_match = re.fullmatch(r"\(\s*['\"](.+?)['\"]\s*,\s*\)", value)
+    tuple_match = re.fullmatch(r"\(\s*[\'\"](.+?)[\'\"]\s*,\s*\)", value)
     if tuple_match:
         value = normalize_text(tuple_match.group(1))
 
-    return value
+    return value.upper()
+
+
+def location_equals(column, value):
+    value = normalize_location(value)
+    return func.upper(column) == value
+
+
+def location_like(column, value):
+    value = normalize_location(value)
+    return func.upper(column).like(f"%{value}%")
 
 
 def prefer_new_value(new_value, old_value=None):
@@ -518,10 +528,10 @@ def trim_accessory_images(accessory):
 
 
 def get_asset_location_images(location):
-    location = normalize_text(location)
+    location = normalize_location(location)
     if not location:
         return []
-    return AssetLocationImage.query.filter_by(location_name=location).order_by(AssetLocationImage.created_at.asc(), AssetLocationImage.id.asc()).all()
+    return AssetLocationImage.query.filter(location_equals(AssetLocationImage.location_name, location)).order_by(AssetLocationImage.created_at.asc(), AssetLocationImage.id.asc()).all()
 
 
 def trim_asset_location_images(location):
@@ -662,7 +672,7 @@ def build_search_rows(keyword="", searched=False):
     if not is_precise_group_keyword:
         owner_asset_conditions.extend([
             Asset.owner.like(f"%{keyword}%"),
-            Asset.location.like(f"%{keyword}%")
+            location_like(Asset.location, keyword)
         ])
     if remark_search_enabled:
         owner_asset_conditions.append(Asset.remark.like(f"%{keyword}%"))
@@ -695,7 +705,7 @@ def build_search_rows(keyword="", searched=False):
     if not is_precise_group_keyword:
         owner_accessory_conditions.extend([
             Accessory.owner.like(f"%{keyword}%"),
-            Accessory.location.like(f"%{keyword}%")
+            location_like(Accessory.location, keyword)
         ])
     if remark_search_enabled:
         owner_accessory_conditions.append(Accessory.remark.like(f"%{keyword}%"))
@@ -804,7 +814,7 @@ def build_search_rows(keyword="", searched=False):
         if not is_precise_group_keyword:
             standalone_conditions.extend([
                 Accessory.owner.like(f"%{keyword}%"),
-                Accessory.location.like(f"%{keyword}%")
+                location_like(Accessory.location, keyword)
             ])
         if remark_search_enabled:
             standalone_conditions.append(Accessory.remark.like(f"%{keyword}%"))
@@ -1126,37 +1136,61 @@ def validate_import_group_no_type(group_no):
 
 
 def get_asset_matches(internal_no="", group_no=""):
+    internal_no = normalize_text(internal_no)
     group_no = normalize_text(group_no)
-    if not group_no:
-        return []
 
-    matches = Asset.query.filter_by(group_no=group_no).all()
-    if matches:
-        return matches
+    if group_no:
+        matches = Asset.query.filter_by(group_no=group_no).all()
+        if matches:
+            return matches
 
-    # 兼容修复：历史错位导入可能把集团编号写进了内部编号，且集团编号为空。
-    # 正常导入仍然只以集团编号作为主匹配依据；只有找不到集团编号匹配时，才尝试定位这类旧错位记录，
-    # 以便重新上传标准表后可以把内部编号和集团编号纠正回来，避免产生重复资产。
-    return Asset.query.filter(
-        Asset.internal_no == group_no,
-        or_(Asset.group_no.is_(None), Asset.group_no == "")
-    ).all()
+    # 兼容补齐：数据库中已有内部编号但集团编号为空时，
+    # 允许用本次导入的内部编号匹配旧记录，并补上集团编号。
+    if internal_no:
+        matches = Asset.query.filter(
+            Asset.internal_no == internal_no,
+            or_(Asset.group_no.is_(None), Asset.group_no == "")
+        ).all()
+        if matches:
+            return matches
+
+    if group_no:
+        # 兼容修复：历史错位导入可能把集团编号写进了内部编号，且集团编号为空。
+        return Asset.query.filter(
+            Asset.internal_no == group_no,
+            or_(Asset.group_no.is_(None), Asset.group_no == "")
+        ).all()
+
+    return []
 
 
 def get_accessory_matches(internal_no="", group_no=""):
+    internal_no = normalize_text(internal_no)
     group_no = normalize_text(group_no)
-    if not group_no:
-        return []
 
-    matches = Accessory.query.filter_by(sub_group_no=group_no).all()
-    if matches:
-        return matches
+    if group_no:
+        matches = Accessory.query.filter_by(sub_group_no=group_no).all()
+        if matches:
+            return matches
 
-    # 兼容修复：历史错位导入可能把附属资产集团编号写进了附属资产内部编号，且附属资产集团编号为空。
-    return Accessory.query.filter(
-        Accessory.sub_internal_no == group_no,
-        or_(Accessory.sub_group_no.is_(None), Accessory.sub_group_no == "")
-    ).all()
+    # 兼容补齐：数据库中已有附属资产内部编号但集团编号为空时，
+    # 允许用本次导入的内部编号匹配旧记录，并补上附属资产集团编号。
+    if internal_no:
+        matches = Accessory.query.filter(
+            Accessory.sub_internal_no == internal_no,
+            or_(Accessory.sub_group_no.is_(None), Accessory.sub_group_no == "")
+        ).all()
+        if matches:
+            return matches
+
+    if group_no:
+        # 兼容修复：历史错位导入可能把附属资产集团编号写进了附属资产内部编号，且附属资产集团编号为空。
+        return Accessory.query.filter(
+            Accessory.sub_internal_no == group_no,
+            or_(Accessory.sub_group_no.is_(None), Accessory.sub_group_no == "")
+        ).all()
+
+    return []
 
 
 def resolve_parent_asset_id_by_group_no(group_no=""):
@@ -1200,7 +1234,7 @@ def upsert_asset_from_import_row(row_data):
     name = normalize_text(row_data.get("名称"))
     model = normalize_text(row_data.get("型号"))
     owner = normalize_text(row_data.get("责任人"))
-    location = normalize_text(row_data.get("位置"))
+    location = normalize_location(row_data.get("位置"))
     status = normalize_status_value(row_data.get("状态"))
     remark = normalize_text(row_data.get("备注"))
     asset_date = parse_import_date(row_data.get("时间"))
@@ -1217,9 +1251,12 @@ def upsert_asset_from_import_row(row_data):
     )
 
     if obj:
-        # 编号字段以本次标准导入表为准：集团编号必填，内部编号允许为空且应覆盖历史错值。
-        obj.group_no = normalize_empty_to_none(group_no)
-        obj.internal_no = normalize_empty_to_none(internal_no)
+        # 编号字段按“Excel 有值才覆盖，空白保留现有值”处理；
+        # 可用于补齐历史记录缺失的集团编号或内部编号。
+        if group_no:
+            obj.group_no = group_no
+        if internal_no:
+            obj.internal_no = internal_no
         obj.name = prefer_new_value(name, obj.name) or obj.internal_no or obj.group_no or obj.name
         obj.model = prefer_new_value(model, obj.model)
         obj.owner = prefer_new_value(owner, obj.owner)
@@ -1251,7 +1288,7 @@ def upsert_accessory_from_import_row(row_data):
     name = normalize_text(row_data.get("名称"))
     model = normalize_text(row_data.get("型号"))
     owner = normalize_text(row_data.get("责任人"))
-    location = normalize_text(row_data.get("位置"))
+    location = normalize_location(row_data.get("位置"))
     status = normalize_status_value(row_data.get("状态"))
     remark = normalize_text(row_data.get("备注"))
     asset_date = parse_import_date(row_data.get("时间"))
@@ -1270,9 +1307,12 @@ def upsert_accessory_from_import_row(row_data):
 
     if obj:
         obj.parent_asset_id = parent_asset_id or obj.parent_asset_id
-        # 编号字段以本次标准导入表为准：附属资产集团编号必填，内部编号允许为空且应覆盖历史错值。
-        obj.sub_group_no = normalize_empty_to_none(group_no)
-        obj.sub_internal_no = normalize_empty_to_none(internal_no)
+        # 编号字段按“Excel 有值才覆盖，空白保留现有值”处理；
+        # 可用于补齐历史记录缺失的附属资产集团编号或内部编号。
+        if group_no:
+            obj.sub_group_no = group_no
+        if internal_no:
+            obj.sub_internal_no = internal_no
         obj.name = prefer_new_value(name, obj.name) or obj.sub_internal_no or obj.sub_group_no or obj.name
         obj.model = prefer_new_value(model, obj.model)
         obj.owner = prefer_new_value(owner, obj.owner)
@@ -1707,6 +1747,12 @@ def register_routes(app):
     @app.route("/login", methods=["GET", "POST"])
     def login():
         if request.method == "POST":
+            # 只处理用户明确点击“登录”按钮提交的请求。
+            # 个别手机浏览器/密码管理器可能在输入完成时触发表单提交，
+            # 这类请求不应按空账号密码校验，否则会把页面刷新并清空输入框。
+            if normalize_text(request.form.get("login_submit")) != "1":
+                return render_template("login.html", error="")
+
             username = normalize_text(request.form.get("username"))
             password = normalize_text(request.form.get("password"))
 
@@ -1887,9 +1933,9 @@ def register_routes(app):
         guard = ensure_read_access()
         if guard:
             return guard
-        location = normalize_text(request.args.get("location"))
+        location = normalize_location(request.args.get("location"))
         if not location:
-            location = normalize_text(request.form.get("location"))
+            location = normalize_location(request.form.get("location"))
         if not location:
             return redirect(url_for("search_assets"))
 
@@ -1901,7 +1947,7 @@ def register_routes(app):
             manage_guard = ensure_manage_access()
             if manage_guard:
                 return manage_guard
-            new_location = normalize_text(request.form.get("new_location")) or normalize_text(request.form.get("location"))
+            new_location = normalize_location(request.form.get("new_location")) or normalize_location(request.form.get("location"))
             image_files = request.files.getlist("image_files")
             delete_image_ids = request.form.getlist("delete_location_image_ids")
 
@@ -1911,23 +1957,22 @@ def register_routes(app):
                 old_location = location
                 current_location = new_location
                 try:
-                    if old_location != new_location:
-                        Asset.query.filter_by(location=old_location).update({"location": new_location}, synchronize_session=False)
-                        Accessory.query.filter_by(location=old_location).update({"location": new_location}, synchronize_session=False)
-                        AssetLocationImage.query.filter_by(location_name=old_location).update({"location_name": new_location}, synchronize_session=False)
+                    Asset.query.filter(location_equals(Asset.location, old_location)).update({"location": new_location}, synchronize_session=False)
+                    Accessory.query.filter(location_equals(Accessory.location, old_location)).update({"location": new_location}, synchronize_session=False)
+                    AssetLocationImage.query.filter(location_equals(AssetLocationImage.location_name, old_location)).update({"location_name": new_location}, synchronize_session=False)
 
                     for image_id in delete_image_ids:
                         try:
                             img_id = int(image_id)
                         except Exception:
                             continue
-                        img = AssetLocationImage.query.filter_by(id=img_id, location_name=current_location).first()
+                        img = AssetLocationImage.query.filter(AssetLocationImage.id == img_id, location_equals(AssetLocationImage.location_name, current_location)).first()
                         if img:
                             delete_image_file(img.image_path)
                             db.session.delete(img)
 
                     image_prefix = sanitize_image_prefix(current_location)
-                    for file_storage in image_files:
+                    for file_storage in image_files[:5]:
                         rel = save_uploaded_image(file_storage, "asset_locations", image_prefix)
                         if rel:
                             db.session.add(AssetLocationImage(location_name=current_location, image_path=rel))
@@ -1942,7 +1987,7 @@ def register_routes(app):
         location = current_location
         rows = []
 
-        asset_items = Asset.query.filter(Asset.location == location).order_by(Asset.internal_no.asc(), Asset.group_no.asc(), Asset.id.asc()).all()
+        asset_items = Asset.query.filter(location_equals(Asset.location, location)).order_by(Asset.internal_no.asc(), Asset.group_no.asc(), Asset.id.asc()).all()
         for item in asset_items:
             rows.append({
                 "group_no": item.group_no or "",
@@ -1956,7 +2001,7 @@ def register_routes(app):
                 "detail_url": url_for("asset_detail", asset_id=item.id),
             })
 
-        accessory_items = Accessory.query.filter(Accessory.location == location).order_by(Accessory.sub_internal_no.asc(), Accessory.sub_group_no.asc(), Accessory.id.asc()).all()
+        accessory_items = Accessory.query.filter(location_equals(Accessory.location, location)).order_by(Accessory.sub_internal_no.asc(), Accessory.sub_group_no.asc(), Accessory.id.asc()).all()
         for item in accessory_items:
             rows.append({
                 "group_no": item.sub_group_no or "",
@@ -2318,7 +2363,7 @@ def register_routes(app):
         recognized_no = normalize_text(request.args.get("recognized_no")) or normalize_text(request.args.get("recognized_group_no"))
         preset_group_no = normalize_text(request.args.get("group_no"))
         preset_internal_no = normalize_text(request.args.get("internal_no"))
-        preset_location = normalize_text(request.args.get("location"))
+        preset_location = normalize_location(request.args.get("location"))
         parent_asset = Asset.query.get(int(parent_asset_id)) if parent_asset_id.isdigit() else None
 
         default_group_no = preset_group_no
@@ -2332,7 +2377,7 @@ def register_routes(app):
         if device_type == "配件" and parent_asset:
             default_group_no = default_group_no or make_accessory_prefix(parent_asset.group_no)
             default_internal_no = default_internal_no or make_accessory_prefix(parent_asset.internal_no)
-            default_location = default_location or normalize_text(parent_asset.location)
+            default_location = default_location or normalize_location(parent_asset.location)
 
         form_data = {
             "device_type": device_type,
@@ -2355,7 +2400,7 @@ def register_routes(app):
             name = normalize_text(request.form.get("name"))
             model = normalize_text(request.form.get("model"))
             owner = normalize_text(request.form.get("owner"))
-            location = normalize_text(request.form.get("location"))
+            location = normalize_location(request.form.get("location"))
             asset_date_str = normalize_text(request.form.get("asset_date"))
             status = normalize_status_value(request.form.get("status"))
             remark = normalize_text(request.form.get("remark"))
@@ -2422,7 +2467,7 @@ def register_routes(app):
                                 group_no=group_no,
                                 internal_no=internal_no
                             )
-                            for file_storage in image_files:
+                            for file_storage in image_files[:5]:
                                 rel = save_uploaded_image(file_storage, "assets", image_filename_prefix)
                                 if rel:
                                     db.session.add(AssetImage(asset_id=obj.id, image_path=rel))
@@ -2466,7 +2511,7 @@ def register_routes(app):
                                 internal_no=internal_no,
                                 parent_asset=parent_asset
                             )
-                            for file_storage in image_files:
+                            for file_storage in image_files[:5]:
                                 rel = save_uploaded_image(file_storage, "accessories", image_filename_prefix)
                                 if rel:
                                     db.session.add(AccessoryImage(accessory_id=obj.id, image_path=rel))
@@ -2518,7 +2563,7 @@ def register_routes(app):
                 name = normalize_text(request.form.get("name"))
                 model = normalize_text(request.form.get("model"))
                 owner = normalize_text(request.form.get("owner"))
-                location = normalize_text(request.form.get("location"))
+                location = normalize_location(request.form.get("location"))
                 status = normalize_status_value(request.form.get("status"))
                 remark = normalize_text(request.form.get("remark"))
                 image_files = request.files.getlist("image_files")
@@ -2567,7 +2612,7 @@ def register_routes(app):
                                     delete_image_file(img.image_path)
                                     db.session.delete(img)
 
-                            for file_storage in image_files:
+                            for file_storage in image_files[:5]:
                                 rel = save_uploaded_image(file_storage, "assets", image_filename_prefix)
                                 if rel:
                                     db.session.add(AssetImage(asset_id=asset.id, image_path=rel))
@@ -2654,7 +2699,7 @@ def register_routes(app):
             name = normalize_text(request.form.get("name"))
             model = normalize_text(request.form.get("model"))
             owner = normalize_text(request.form.get("owner"))
-            location = normalize_text(request.form.get("location"))
+            location = normalize_location(request.form.get("location"))
             status = normalize_status_value(request.form.get("status"))
             remark = normalize_text(request.form.get("remark"))
             image_files = request.files.getlist("image_files")
@@ -2715,7 +2760,7 @@ def register_routes(app):
                                     delete_image_file(img.image_path)
                                     db.session.delete(img)
 
-                            for file_storage in image_files:
+                            for file_storage in image_files[:5]:
                                 rel = save_uploaded_image(file_storage, "accessories", image_filename_prefix)
                                 if rel:
                                     db.session.add(AccessoryImage(accessory_id=accessory.id, image_path=rel))
@@ -3155,7 +3200,7 @@ function confirmDeleteSelected(){
                 <button type="submit" class="btn-orange {% if not can_manage %}btn-disabled{% endif %}" {% if not can_manage %}disabled{% endif %}>批量上传设备</button>
                 {% if import_log_url %}<a href="{{ import_log_url }}"><button type="button" class="btn-gray">下载失败日志</button></a>{% endif %}
             </div>
-            <div class="muted" style="margin-top:8px;">Excel导入格式与导出一致</div>
+            <div class="muted" style="margin-top:8px;">Excel导入、导出格式一致，导入操作只更新，不会空白填充。</div>
         </form>
         {% if error %}<div class="err">{{ error }}</div>{% endif %}
     </div>
@@ -3291,6 +3336,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .upload-actions{display:flex;gap:8px;flex-wrap:wrap;}
 .upload-actions button{width:auto;min-width:120px;}
 .file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
+.upload-preview-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}.upload-preview-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #e1e7ef;border-radius:10px;background:#fbfdff;color:#4d5b6b;}.upload-preview-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.upload-remove-btn{width:28px;min-width:28px;height:28px;padding:0;border-radius:999px;background:#dc2626;color:#fff;border:none;box-shadow:none;font-weight:900;line-height:1;display:inline-flex;align-items:center;justify-content:center;}
 .upload-dialog{position:fixed;left:0;top:0;width:100vw;height:100dvh;background:transparent;display:none;z-index:9999;overflow:hidden;} .upload-dialog.show{display:block;} .upload-dialog-card{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);width:min(320px,calc(100vw - 24px));max-width:320px;background:#fff;border-radius:16px;padding:18px;box-shadow:0 20px 40px rgba(15,23,42,.22);z-index:10000;}
 .upload-dialog-title{font-size:18px;font-weight:bold;margin-bottom:12px;text-align:center;color:#163047;}
 .upload-dialog-actions{display:flex;flex-direction:column;gap:10px;}
@@ -3364,14 +3410,102 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 <script>
 function openUploadChooser(dialogId, triggerEl){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.add('show'); } }
 function closeUploadChooser(dialogId){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.remove('show'); } }
-function updateSelectedFiles(inputId, textId, dialogId){
-    const textEl = document.getElementById(textId); if(!textEl){ return; }
-    const inputIds = (textEl.dataset.inputs || inputId || '').split(',').map(item => item.trim()).filter(Boolean);
-    const files = [];
-    inputIds.forEach(id => { const input = document.getElementById(id); if(input && input.files){ Array.from(input.files).forEach(file => files.push(file)); } });
-    textEl.textContent = files.length > 0 ? `已选择 ${files.length} 张：${files.map(file => file.name).join('，')}` : '未选择图片';
-    if(dialogId){ closeUploadChooser(dialogId); }
+const uploadSelectionState = window.uploadSelectionState || (window.uploadSelectionState = {});
+function getUploadInputIds(textEl, fallbackInputId){ return (textEl.dataset.inputs || fallbackInputId || '').split(',').map(item => item.trim()).filter(Boolean); }
+function makeShortUploadName(file){
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const ms = String(now.getMilliseconds()).padStart(3, '0');
+    const timePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${ms}`;
+    const originalName = file && file.name ? file.name : '';
+    const extMatch = originalName.match(/[.]([A-Za-z0-9]+)$/);
+    const ext = extMatch ? extMatch[1].toLowerCase() : 'jpg';
+    return `${timePart}.${ext}`;
 }
+function cloneUploadFileWithShortName(file){
+    if(!file){ return file; }
+    try{
+        if(file.__shortUploadName){ return file; }
+        const newFile = new File([file], makeShortUploadName(file), { type: file.type || 'image/jpeg', lastModified: file.lastModified || Date.now() });
+        Object.defineProperty(newFile, '__shortUploadName', { value: true });
+        return newFile;
+    }catch(e){
+        return file;
+    }
+}
+function syncUploadInputs(textId, activeInputId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || { files: [] };
+    const inputIds = getUploadInputIds(textEl, activeInputId);
+    if(typeof DataTransfer !== 'undefined'){
+        const transfer = new DataTransfer();
+        state.files.forEach(file => transfer.items.add(file));
+        inputIds.forEach((id, index) => {
+            const input = document.getElementById(id);
+            if(!input){ return; }
+            try{ input.files = (id === activeInputId || index === 0) ? transfer.files : new DataTransfer().files; }catch(e){}
+        });
+    }
+}
+function renderUploadSelection(textId, activeInputId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || { files: [] };
+    if(state.files.length <= 0){
+        textEl.textContent = '未选择图片';
+        syncUploadInputs(textId, activeInputId);
+        return;
+    }
+    textEl.innerHTML = '';
+    const summary = document.createElement('div');
+    summary.textContent = `已选择 ${state.files.length} 张（本次最多5张）`;
+    textEl.appendChild(summary);
+    const list = document.createElement('div');
+    list.className = 'upload-preview-list';
+    state.files.forEach((file, index) => {
+        const item = document.createElement('div');
+        item.className = 'upload-preview-item';
+        const name = document.createElement('span');
+        name.className = 'upload-preview-name';
+        name.textContent = file.name || `图片${index + 1}`;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'upload-remove-btn';
+        remove.setAttribute('aria-label', '删除该图片');
+        remove.textContent = '×';
+        remove.onclick = function(){ removeSelectedUploadFile(textId, index, activeInputId); };
+        item.appendChild(name);
+        item.appendChild(remove);
+        list.appendChild(item);
+    });
+    textEl.appendChild(list);
+    syncUploadInputs(textId, activeInputId);
+}
+function removeSelectedUploadFile(textId, index, activeInputId){
+    const state = uploadSelectionState[textId];
+    if(!state){ return; }
+    state.files.splice(index, 1);
+    renderUploadSelection(textId, activeInputId);
+}
+function updateSelectedFiles(inputId, textId, dialogId){
+    const input = document.getElementById(inputId);
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || (uploadSelectionState[textId] = { files: [] });
+    const incoming = input && input.files ? Array.from(input.files).map(cloneUploadFileWithShortName) : [];
+    incoming.forEach(file => {
+        if(state.files.length < 5){ state.files.push(file); }
+    });
+    if(input){ try{ input.value = ''; }catch(e){} }
+    renderUploadSelection(textId, inputId);
+    if(dialogId){ closeUploadChooser(dialogId); }
+    if(incoming.length > 0 && state.files.length >= 5){
+        const summary = textEl.querySelector('div');
+        if(summary){ summary.textContent = `已选择 ${state.files.length} 张（已达本次最多5张）`; }
+    }
+}
+
 function enableEdit(formId){
     const form = document.getElementById(formId);
     const fields = form.querySelectorAll('.edit-field');
@@ -3480,7 +3614,12 @@ function confirmLocationSave(){ return confirm('确认保存货架位置和图�
                     <tr class="result-row result-row-{{ 'asset' if item.type_text == '主设备' else 'accessory' }}">
                         <td><a class="num-link" href="{{ item.detail_url }}">{{ item.group_no }}</a></td>
                         <td><a class="num-link" href="{{ item.detail_url }}">{{ item.internal_no }}</a></td>
-                        <td>{{ item.name }}</td><td>{{ item.status }}</td><td>{{ item.owner }}</td><td>{{ item.asset_date_text or "" }}</td>
+                        <td>{{ item.name }}</td>
+                        <td>{{ item.model }}</td>
+                        <td>{{ item.status }}</td>
+                        <td>{{ item.owner }}</td>
+                        <td>{{ item.type_text }}</td>
+                        <td>{{ item.asset_date_text or "" }}</td>
                     </tr>
                     {% endfor %}
                     {% if not rows %}<tr class="empty-row"><td colspan="8">该位置下暂无资产</td></tr>{% endif %}
@@ -4647,6 +4786,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .upload-actions{display:flex;gap:8px;flex-wrap:wrap;}
 .upload-actions button{width:auto;min-width:120px;}
 .file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
+.upload-preview-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}.upload-preview-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #e1e7ef;border-radius:10px;background:#fbfdff;color:#4d5b6b;}.upload-preview-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.upload-remove-btn{width:28px;min-width:28px;height:28px;padding:0;border-radius:999px;background:#dc2626;color:#fff;border:none;box-shadow:none;font-weight:900;line-height:1;display:inline-flex;align-items:center;justify-content:center;}
 .upload-dialog{position:fixed;left:0;top:0;width:100vw;height:100dvh;background:transparent;display:none;z-index:9999;overflow:hidden;} .upload-dialog.show{display:block;} .upload-dialog-card{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);width:min(320px,calc(100vw - 24px));max-width:320px;background:#fff;border-radius:16px;padding:18px;box-shadow:0 20px 40px rgba(15,23,42,.22);z-index:10000;}
 .upload-dialog-title{font-size:18px;font-weight:bold;margin-bottom:12px;text-align:center;color:#163047;}
 .upload-dialog-actions{display:flex;flex-direction:column;gap:10px;}
@@ -4741,32 +4881,102 @@ function confirmDeviceSave(form){
 
 function openUploadChooser(dialogId, triggerEl){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.add('show'); } }
 function closeUploadChooser(dialogId){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.remove('show'); } }
-function updateSelectedFiles(inputId, textId, dialogId){
-    const textEl = document.getElementById(textId);
-    if(!textEl){
-        return;
-    }
-
-    const inputIds = (textEl.dataset.inputs || inputId || '').split(',').map(item => item.trim()).filter(Boolean);
-    const files = [];
-    inputIds.forEach(id => {
-        const input = document.getElementById(id);
-        if(input && input.files){
-            Array.from(input.files).forEach(file => files.push(file));
-        }
-    });
-
-    if(files.length > 0){
-        const names = files.map(file => file.name).join('，');
-        textEl.textContent = `已选择 ${files.length} 张：${names}`;
-    }else{
-        textEl.textContent = '未选择图片';
-    }
-
-    if(dialogId){
-        closeUploadChooser(dialogId);
+const uploadSelectionState = window.uploadSelectionState || (window.uploadSelectionState = {});
+function getUploadInputIds(textEl, fallbackInputId){ return (textEl.dataset.inputs || fallbackInputId || '').split(',').map(item => item.trim()).filter(Boolean); }
+function makeShortUploadName(file){
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const ms = String(now.getMilliseconds()).padStart(3, '0');
+    const timePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${ms}`;
+    const originalName = file && file.name ? file.name : '';
+    const extMatch = originalName.match(/[.]([A-Za-z0-9]+)$/);
+    const ext = extMatch ? extMatch[1].toLowerCase() : 'jpg';
+    return `${timePart}.${ext}`;
+}
+function cloneUploadFileWithShortName(file){
+    if(!file){ return file; }
+    try{
+        if(file.__shortUploadName){ return file; }
+        const newFile = new File([file], makeShortUploadName(file), { type: file.type || 'image/jpeg', lastModified: file.lastModified || Date.now() });
+        Object.defineProperty(newFile, '__shortUploadName', { value: true });
+        return newFile;
+    }catch(e){
+        return file;
     }
 }
+function syncUploadInputs(textId, activeInputId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || { files: [] };
+    const inputIds = getUploadInputIds(textEl, activeInputId);
+    if(typeof DataTransfer !== 'undefined'){
+        const transfer = new DataTransfer();
+        state.files.forEach(file => transfer.items.add(file));
+        inputIds.forEach((id, index) => {
+            const input = document.getElementById(id);
+            if(!input){ return; }
+            try{ input.files = (id === activeInputId || index === 0) ? transfer.files : new DataTransfer().files; }catch(e){}
+        });
+    }
+}
+function renderUploadSelection(textId, activeInputId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || { files: [] };
+    if(state.files.length <= 0){
+        textEl.textContent = '未选择图片';
+        syncUploadInputs(textId, activeInputId);
+        return;
+    }
+    textEl.innerHTML = '';
+    const summary = document.createElement('div');
+    summary.textContent = `已选择 ${state.files.length} 张（本次最多5张）`;
+    textEl.appendChild(summary);
+    const list = document.createElement('div');
+    list.className = 'upload-preview-list';
+    state.files.forEach((file, index) => {
+        const item = document.createElement('div');
+        item.className = 'upload-preview-item';
+        const name = document.createElement('span');
+        name.className = 'upload-preview-name';
+        name.textContent = file.name || `图片${index + 1}`;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'upload-remove-btn';
+        remove.setAttribute('aria-label', '删除该图片');
+        remove.textContent = '×';
+        remove.onclick = function(){ removeSelectedUploadFile(textId, index, activeInputId); };
+        item.appendChild(name);
+        item.appendChild(remove);
+        list.appendChild(item);
+    });
+    textEl.appendChild(list);
+    syncUploadInputs(textId, activeInputId);
+}
+function removeSelectedUploadFile(textId, index, activeInputId){
+    const state = uploadSelectionState[textId];
+    if(!state){ return; }
+    state.files.splice(index, 1);
+    renderUploadSelection(textId, activeInputId);
+}
+function updateSelectedFiles(inputId, textId, dialogId){
+    const input = document.getElementById(inputId);
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || (uploadSelectionState[textId] = { files: [] });
+    const incoming = input && input.files ? Array.from(input.files).map(cloneUploadFileWithShortName) : [];
+    incoming.forEach(file => {
+        if(state.files.length < 5){ state.files.push(file); }
+    });
+    if(input){ try{ input.value = ''; }catch(e){} }
+    renderUploadSelection(textId, inputId);
+    if(dialogId){ closeUploadChooser(dialogId); }
+    if(incoming.length > 0 && state.files.length >= 5){
+        const summary = textEl.querySelector('div');
+        if(summary){ summary.textContent = `已选择 ${state.files.length} 张（已达本次最多5张）`; }
+    }
+}
+
 </script>
 </head>
 <body>
@@ -4890,6 +5100,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .upload-actions{display:flex;gap:8px;flex-wrap:wrap;}
 .upload-actions button{width:auto;min-width:120px;}
 .file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
+.upload-preview-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}.upload-preview-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #e1e7ef;border-radius:10px;background:#fbfdff;color:#4d5b6b;}.upload-preview-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.upload-remove-btn{width:28px;min-width:28px;height:28px;padding:0;border-radius:999px;background:#dc2626;color:#fff;border:none;box-shadow:none;font-weight:900;line-height:1;display:inline-flex;align-items:center;justify-content:center;}
 .upload-dialog{position:fixed;left:0;top:0;width:100vw;height:100dvh;background:transparent;display:none;z-index:9999;overflow:hidden;} .upload-dialog.show{display:block;} .upload-dialog-card{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);width:min(320px,calc(100vw - 24px));max-width:320px;background:#fff;border-radius:16px;padding:18px;box-shadow:0 20px 40px rgba(15,23,42,.22);z-index:10000;}
 .upload-dialog-title{font-size:18px;font-weight:bold;margin-bottom:12px;text-align:center;color:#163047;}
 .upload-dialog-actions{display:flex;flex-direction:column;gap:10px;}
@@ -4960,7 +5171,102 @@ function beginEdit(formId, buttonId){ const form = document.getElementById(formI
 function handleEditOrSave(formId, buttonId){ const button = document.getElementById(buttonId); if(!button){ return false; } const mode = button.getAttribute('data-mode') || 'edit'; if(mode === 'save'){ const form = document.getElementById(formId); if(form){ if(form.requestSubmit){ form.requestSubmit(); } else { form.submit(); } } return false; } return beginEdit(formId, buttonId); }
 function openUploadChooser(dialogId, triggerEl){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.add('show'); } }
 function closeUploadChooser(dialogId){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.remove('show'); } }
-function updateSelectedFiles(inputId, textId, dialogId){ const textEl = document.getElementById(textId); if(!textEl){ return; } const inputIds = (textEl.dataset.inputs || inputId || '').split(',').map(item => item.trim()).filter(Boolean); const files = []; inputIds.forEach(id => { const input = document.getElementById(id); if(input && input.files){ Array.from(input.files).forEach(file => files.push(file)); } }); textEl.textContent = files.length > 0 ? `已选择 ${files.length} 张：${files.map(file => file.name).join('，')}` : '未选择图片'; if(dialogId){ closeUploadChooser(dialogId); } }
+const uploadSelectionState = window.uploadSelectionState || (window.uploadSelectionState = {});
+function getUploadInputIds(textEl, fallbackInputId){ return (textEl.dataset.inputs || fallbackInputId || '').split(',').map(item => item.trim()).filter(Boolean); }
+function makeShortUploadName(file){
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const ms = String(now.getMilliseconds()).padStart(3, '0');
+    const timePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${ms}`;
+    const originalName = file && file.name ? file.name : '';
+    const extMatch = originalName.match(/[.]([A-Za-z0-9]+)$/);
+    const ext = extMatch ? extMatch[1].toLowerCase() : 'jpg';
+    return `${timePart}.${ext}`;
+}
+function cloneUploadFileWithShortName(file){
+    if(!file){ return file; }
+    try{
+        if(file.__shortUploadName){ return file; }
+        const newFile = new File([file], makeShortUploadName(file), { type: file.type || 'image/jpeg', lastModified: file.lastModified || Date.now() });
+        Object.defineProperty(newFile, '__shortUploadName', { value: true });
+        return newFile;
+    }catch(e){
+        return file;
+    }
+}
+function syncUploadInputs(textId, activeInputId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || { files: [] };
+    const inputIds = getUploadInputIds(textEl, activeInputId);
+    if(typeof DataTransfer !== 'undefined'){
+        const transfer = new DataTransfer();
+        state.files.forEach(file => transfer.items.add(file));
+        inputIds.forEach((id, index) => {
+            const input = document.getElementById(id);
+            if(!input){ return; }
+            try{ input.files = (id === activeInputId || index === 0) ? transfer.files : new DataTransfer().files; }catch(e){}
+        });
+    }
+}
+function renderUploadSelection(textId, activeInputId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || { files: [] };
+    if(state.files.length <= 0){
+        textEl.textContent = '未选择图片';
+        syncUploadInputs(textId, activeInputId);
+        return;
+    }
+    textEl.innerHTML = '';
+    const summary = document.createElement('div');
+    summary.textContent = `已选择 ${state.files.length} 张（本次最多5张）`;
+    textEl.appendChild(summary);
+    const list = document.createElement('div');
+    list.className = 'upload-preview-list';
+    state.files.forEach((file, index) => {
+        const item = document.createElement('div');
+        item.className = 'upload-preview-item';
+        const name = document.createElement('span');
+        name.className = 'upload-preview-name';
+        name.textContent = file.name || `图片${index + 1}`;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'upload-remove-btn';
+        remove.setAttribute('aria-label', '删除该图片');
+        remove.textContent = '×';
+        remove.onclick = function(){ removeSelectedUploadFile(textId, index, activeInputId); };
+        item.appendChild(name);
+        item.appendChild(remove);
+        list.appendChild(item);
+    });
+    textEl.appendChild(list);
+    syncUploadInputs(textId, activeInputId);
+}
+function removeSelectedUploadFile(textId, index, activeInputId){
+    const state = uploadSelectionState[textId];
+    if(!state){ return; }
+    state.files.splice(index, 1);
+    renderUploadSelection(textId, activeInputId);
+}
+function updateSelectedFiles(inputId, textId, dialogId){
+    const input = document.getElementById(inputId);
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || (uploadSelectionState[textId] = { files: [] });
+    const incoming = input && input.files ? Array.from(input.files).map(cloneUploadFileWithShortName) : [];
+    incoming.forEach(file => {
+        if(state.files.length < 5){ state.files.push(file); }
+    });
+    if(input){ try{ input.value = ''; }catch(e){} }
+    renderUploadSelection(textId, inputId);
+    if(dialogId){ closeUploadChooser(dialogId); }
+    if(incoming.length > 0 && state.files.length >= 5){
+        const summary = textEl.querySelector('div');
+        if(summary){ summary.textContent = `已选择 ${state.files.length} 张（已达本次最多5张）`; }
+    }
+}
+
 
 const deleteModalState = { onOk: null, onCancel: null };
 function closeDeleteModal(){
@@ -5214,6 +5520,7 @@ tbody tr:hover td{background:#eff3f7;}
 .upload-actions{display:flex;gap:8px;flex-wrap:wrap;}
 .upload-actions button{width:auto;min-width:120px;}
 .file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
+.upload-preview-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}.upload-preview-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #e1e7ef;border-radius:10px;background:#fbfdff;color:#4d5b6b;}.upload-preview-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.upload-remove-btn{width:28px;min-width:28px;height:28px;padding:0;border-radius:999px;background:#dc2626;color:#fff;border:none;box-shadow:none;font-weight:900;line-height:1;display:inline-flex;align-items:center;justify-content:center;}
 .upload-dialog{position:fixed;left:0;top:0;width:100vw;height:100dvh;background:transparent;display:none;z-index:9999;overflow:hidden;} .upload-dialog.show{display:block;} .upload-dialog-card{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);width:min(320px,calc(100vw - 24px));max-width:320px;background:#fff;border-radius:16px;padding:18px;box-shadow:0 20px 40px rgba(15,23,42,.22);z-index:10000;}
 .upload-dialog-title{font-size:18px;font-weight:bold;margin-bottom:12px;text-align:center;color:#163047;}
 .upload-dialog-actions{display:flex;flex-direction:column;gap:10px;}
@@ -5282,7 +5589,102 @@ tbody tr:hover td{background:#eff3f7;}
 function enableEdit(formId){ const form = document.getElementById(formId); const fields = form.querySelectorAll('.edit-field'); fields.forEach(el => { el.disabled = false; el.classList.remove('readonly'); }); document.getElementById(formId + '-save').style.display = 'inline-block'; document.getElementById(formId + '-edit').style.display = 'none'; }
 function openUploadChooser(dialogId, triggerEl){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.add('show'); } }
 function closeUploadChooser(dialogId){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.remove('show'); } }
-function updateSelectedFiles(inputId, textId, dialogId){ const textEl = document.getElementById(textId); if(!textEl){ return; } const inputIds = (textEl.dataset.inputs || inputId || '').split(',').map(item => item.trim()).filter(Boolean); const files = []; inputIds.forEach(id => { const input = document.getElementById(id); if(input && input.files){ Array.from(input.files).forEach(file => files.push(file)); } }); textEl.textContent = files.length > 0 ? `已选择 ${files.length} 张：${files.map(file => file.name).join('，')}` : '未选择图片'; if(dialogId){ closeUploadChooser(dialogId); } }
+const uploadSelectionState = window.uploadSelectionState || (window.uploadSelectionState = {});
+function getUploadInputIds(textEl, fallbackInputId){ return (textEl.dataset.inputs || fallbackInputId || '').split(',').map(item => item.trim()).filter(Boolean); }
+function makeShortUploadName(file){
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const ms = String(now.getMilliseconds()).padStart(3, '0');
+    const timePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${ms}`;
+    const originalName = file && file.name ? file.name : '';
+    const extMatch = originalName.match(/[.]([A-Za-z0-9]+)$/);
+    const ext = extMatch ? extMatch[1].toLowerCase() : 'jpg';
+    return `${timePart}.${ext}`;
+}
+function cloneUploadFileWithShortName(file){
+    if(!file){ return file; }
+    try{
+        if(file.__shortUploadName){ return file; }
+        const newFile = new File([file], makeShortUploadName(file), { type: file.type || 'image/jpeg', lastModified: file.lastModified || Date.now() });
+        Object.defineProperty(newFile, '__shortUploadName', { value: true });
+        return newFile;
+    }catch(e){
+        return file;
+    }
+}
+function syncUploadInputs(textId, activeInputId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || { files: [] };
+    const inputIds = getUploadInputIds(textEl, activeInputId);
+    if(typeof DataTransfer !== 'undefined'){
+        const transfer = new DataTransfer();
+        state.files.forEach(file => transfer.items.add(file));
+        inputIds.forEach((id, index) => {
+            const input = document.getElementById(id);
+            if(!input){ return; }
+            try{ input.files = (id === activeInputId || index === 0) ? transfer.files : new DataTransfer().files; }catch(e){}
+        });
+    }
+}
+function renderUploadSelection(textId, activeInputId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || { files: [] };
+    if(state.files.length <= 0){
+        textEl.textContent = '未选择图片';
+        syncUploadInputs(textId, activeInputId);
+        return;
+    }
+    textEl.innerHTML = '';
+    const summary = document.createElement('div');
+    summary.textContent = `已选择 ${state.files.length} 张（本次最多5张）`;
+    textEl.appendChild(summary);
+    const list = document.createElement('div');
+    list.className = 'upload-preview-list';
+    state.files.forEach((file, index) => {
+        const item = document.createElement('div');
+        item.className = 'upload-preview-item';
+        const name = document.createElement('span');
+        name.className = 'upload-preview-name';
+        name.textContent = file.name || `图片${index + 1}`;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'upload-remove-btn';
+        remove.setAttribute('aria-label', '删除该图片');
+        remove.textContent = '×';
+        remove.onclick = function(){ removeSelectedUploadFile(textId, index, activeInputId); };
+        item.appendChild(name);
+        item.appendChild(remove);
+        list.appendChild(item);
+    });
+    textEl.appendChild(list);
+    syncUploadInputs(textId, activeInputId);
+}
+function removeSelectedUploadFile(textId, index, activeInputId){
+    const state = uploadSelectionState[textId];
+    if(!state){ return; }
+    state.files.splice(index, 1);
+    renderUploadSelection(textId, activeInputId);
+}
+function updateSelectedFiles(inputId, textId, dialogId){
+    const input = document.getElementById(inputId);
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || (uploadSelectionState[textId] = { files: [] });
+    const incoming = input && input.files ? Array.from(input.files).map(cloneUploadFileWithShortName) : [];
+    incoming.forEach(file => {
+        if(state.files.length < 5){ state.files.push(file); }
+    });
+    if(input){ try{ input.value = ''; }catch(e){} }
+    renderUploadSelection(textId, inputId);
+    if(dialogId){ closeUploadChooser(dialogId); }
+    if(incoming.length > 0 && state.files.length >= 5){
+        const summary = textEl.querySelector('div');
+        if(summary){ summary.textContent = `已选择 ${state.files.length} 张（已达本次最多5张）`; }
+    }
+}
+
 function confirmAccessorySave(){ return confirm('确认保存吗？'); }
 function beginEdit(formId, buttonId){ const form = document.getElementById(formId); if(!form){ return false; } const fields = form.querySelectorAll('.edit-field'); fields.forEach(el => { el.disabled = false; el.classList.remove('readonly'); }); const button = document.getElementById(buttonId); if(button){ button.textContent = '确认'; button.setAttribute('data-mode', 'save'); } return false; }
 function handleEditOrSave(formId, buttonId){ const button = document.getElementById(buttonId); if(!button){ return false; } const mode = button.getAttribute('data-mode') || 'edit'; if(mode === 'save'){ const form = document.getElementById(formId); if(form){ if(form.requestSubmit){ form.requestSubmit(); } else { form.submit(); } } return false; } return beginEdit(formId, buttonId); }
