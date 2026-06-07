@@ -560,8 +560,6 @@ def delete_asset_with_files(asset):
         delete_image_file(img.image_path)
     db.session.delete(asset)
 
-
-
 def build_search_rows(keyword="", searched=False):
     if not searched:
         return []
@@ -640,8 +638,6 @@ def build_search_rows(keyword="", searched=False):
     is_group_accessory_keyword = bool(re.fullmatch(r"\d{18}-\d+", keyword))
     is_precise_group_keyword = is_group_asset_keyword or is_group_accessory_keyword
 
-    # 完整集团编号按完整编号检索，避免 18 位编号因后 6 位相同误命中其他主资产。
-    # 普通关键词仍保留原来的后 6 位编号检索。
     suffix_keyword = "" if is_precise_group_keyword else (keyword[-6:] if len(keyword) >= 6 else "")
 
     exact_assets = Asset.query.filter(
@@ -665,10 +661,13 @@ def build_search_rows(keyword="", searched=False):
         if a.id not in asset_ids:
             asset_ids.append(a.id)
 
-    # 备注支持关键词模糊搜索；为避免短关键词误伤，至少连续 2 个字符才启用备注匹配。
-    # 完整集团编号搜索时，只保留备注模糊匹配，不再按责任人/位置模糊匹配。
     remark_search_enabled = len(keyword) >= 2
+
+    # ---------- 主设备检索条件 ----------
     owner_asset_conditions = []
+    # 名称检索始终启用（只要有关键词）
+    if keyword:
+        owner_asset_conditions.append(Asset.name.like(f"%{keyword}%"))
     if not is_precise_group_keyword:
         owner_asset_conditions.extend([
             Asset.owner.like(f"%{keyword}%"),
@@ -685,6 +684,7 @@ def build_search_rows(keyword="", searched=False):
         if a.id not in asset_ids:
             asset_ids.append(a.id)
 
+    # ---------- 配件检索条件 ----------
     exact_accessories = Accessory.query.filter(
         or_(
             Accessory.sub_internal_no == keyword,
@@ -702,6 +702,8 @@ def build_search_rows(keyword="", searched=False):
         ).all()
 
     owner_accessory_conditions = []
+    if keyword:
+        owner_accessory_conditions.append(Accessory.name.like(f"%{keyword}%"))
     if not is_precise_group_keyword:
         owner_accessory_conditions.extend([
             Accessory.owner.like(f"%{keyword}%"),
@@ -740,6 +742,7 @@ def build_search_rows(keyword="", searched=False):
                 standalone_accessories.append(acc)
                 standalone_accessory_ids.add(acc.id)
 
+    # 主设备及挂载配件
     if asset_ids:
         matched_assets = sorted(Asset.query.filter(Asset.id.in_(asset_ids)).all(), key=get_asset_sort_key)
 
@@ -804,6 +807,7 @@ def build_search_rows(keyword="", searched=False):
                 "asset_date_text": item.asset_date.isoformat() if item.asset_date else ""
             })
 
+    # 最终兜底：没有任何关联主设备的配件，单独显示
     if not rows:
         standalone_conditions = [
             Accessory.sub_internal_no == keyword,
@@ -811,6 +815,8 @@ def build_search_rows(keyword="", searched=False):
             Accessory.sub_internal_no.like(f"{keyword}-%"),
             Accessory.sub_group_no.like(f"{keyword}-%"),
         ]
+        # 配件名称检索始终启用
+        standalone_conditions.append(Accessory.name.like(f"%{keyword}%"))
         if not is_precise_group_keyword:
             standalone_conditions.extend([
                 Accessory.owner.like(f"%{keyword}%"),
@@ -851,6 +857,9 @@ def build_search_rows(keyword="", searched=False):
             return build_search_rows(keyword=parent_search_keyword, searched=True)
 
     return rows
+
+
+
 
 
     exact_assets = Asset.query.filter(
