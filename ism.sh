@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_ROOT="/root/ism"
+APP_ROOT="/root/asset_manager"
 APP_DIR="${APP_ROOT}/app"
 VENV_DIR="${APP_ROOT}/venv"
 BACKUP_DIR="${APP_ROOT}/backups"
@@ -14,16 +14,16 @@ SERVICE_NAME="asset_manager"
 SYSTEMD_SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 NGINX_SITE_FILE="/etc/nginx/sites-available/${SERVICE_NAME}_2083.conf"
 NGINX_SITE_LINK="/etc/nginx/sites-enabled/${SERVICE_NAME}_2083.conf"
-STATE_FILE="/root/.ism_install.conf"
+STATE_FILE="/root/.asset_manager_install.conf"
 
 RAW_BASE="https://raw.githubusercontent.com/byilrq/ism/main"
-REPO_URL="https://github.com/byilrq/ism.git"
+APP_ZIP_URL="${RAW_BASE}/app.zip"
 CONFIG_URL="${RAW_BASE}/config.py"
 RUN_URL="${RAW_BASE}/run.py"
 REQ_URL="${RAW_BASE}/requirements.txt"
 SQL_URL="${RAW_BASE}/asset_manager.sql"
 
-TMP_DIR="/tmp/ism_install"
+TMP_DIR="/tmp/asset_manager_install"
 DB_NAME="asset_manager"
 DB_USER="asset_user"
 DB_PASS="by123"
@@ -222,7 +222,7 @@ install_dependencies() {
     info "安装依赖：Nginx / MariaDB / Python / OCR / WebDAV / CloudDrive 运行库"
     apt-get update
     apt-get install -y \
-        nginx mariadb-server cron curl git ca-certificates jq tar fuse3 davfs2 \
+        nginx mariadb-server cron curl unzip ca-certificates jq tar fuse3 davfs2 \
         python3 python3-venv python3-pip python3-dev \
         build-essential default-libmysqlclient-dev pkg-config \
         tesseract-ocr tesseract-ocr-chi-sim
@@ -339,28 +339,13 @@ download_files() {
     rm -rf "$TMP_DIR"
     mkdir -p "$TMP_DIR"
 
-    if ! command -v git >/dev/null 2>&1; then
-        export DEBIAN_FRONTEND=noninteractive
-        info "未检测到 git，正在安装 git"
-        apt-get update
-        apt-get install -y git ca-certificates
-    fi
+    curl -L --fail --retry 3 -o "$TMP_DIR/app.zip" "$APP_ZIP_URL"
+    curl -L --fail --retry 3 -o "$TMP_DIR/config.py" "$CONFIG_URL"
+    curl -L --fail --retry 3 -o "$TMP_DIR/run.py" "$RUN_URL"
+    curl -L --fail --retry 3 -o "$TMP_DIR/requirements.txt" "$REQ_URL"
+    curl -L --fail --retry 3 -o "$TMP_DIR/asset_manager.sql" "$SQL_URL"
 
-    git clone --depth 1 "$REPO_URL" "$TMP_DIR/repo"
-
-    for required_path in \
-        "$TMP_DIR/repo/app" \
-        "$TMP_DIR/repo/config.py" \
-        "$TMP_DIR/repo/run.py" \
-        "$TMP_DIR/repo/requirements.txt" \
-        "$TMP_DIR/repo/asset_manager.sql"; do
-        if [ ! -e "$required_path" ]; then
-            err "仓库缺少必要文件或目录：$required_path"
-            return 1
-        fi
-    done
-
-    ok "项目文件下载完成（app 目录来自 GitHub 仓库 app/，不再使用 app.zip）"
+    ok "项目文件下载完成（app 目录统一来自 app.zip）"
 }
 
 deploy_files() {
@@ -373,12 +358,20 @@ deploy_files() {
     fi
 
     mkdir -p "$APP_ROOT" "$APP_DIR" "$ASSET_IMG_DIR" "$ACCESSORY_IMG_DIR" "$BACKUP_DIR"
+    rm -rf "$TMP_DIR/app_extract"
+    mkdir -p "$TMP_DIR/app_extract"
+    unzip -oq "$TMP_DIR/app.zip" -d "$TMP_DIR/app_extract"
 
-    cp -a "$TMP_DIR/repo/app/." "$APP_DIR/"
-    cp -f "$TMP_DIR/repo/config.py" "$APP_ROOT/config.py"
-    cp -f "$TMP_DIR/repo/run.py" "$APP_ROOT/run.py"
-    cp -f "$TMP_DIR/repo/requirements.txt" "$APP_ROOT/requirements.txt"
-    cp -f "$TMP_DIR/repo/asset_manager.sql" "$APP_ROOT/asset_manager.sql"
+    if [ -d "$TMP_DIR/app_extract/app" ]; then
+        cp -a "$TMP_DIR/app_extract/app/." "$APP_DIR/"
+    else
+        cp -a "$TMP_DIR/app_extract/." "$APP_DIR/"
+    fi
+
+    cp -f "$TMP_DIR/config.py" "$APP_ROOT/config.py"
+    cp -f "$TMP_DIR/run.py" "$APP_ROOT/run.py"
+    cp -f "$TMP_DIR/requirements.txt" "$APP_ROOT/requirements.txt"
+    cp -f "$TMP_DIR/asset_manager.sql" "$APP_ROOT/asset_manager.sql"
 
     mkdir -p "$ASSET_IMG_DIR" "$ACCESSORY_IMG_DIR"
     ok "应用文件已部署"
@@ -387,12 +380,9 @@ deploy_files() {
 sync_custom_files() {
     info "同步仓库主文件"
 
-    cp -f "$TMP_DIR/repo/config.py" "$APP_ROOT/config.py"
-    cp -f "$TMP_DIR/repo/run.py" "$APP_ROOT/run.py"
-    cp -f "$TMP_DIR/repo/requirements.txt" "$APP_ROOT/requirements.txt"
-    cp -f "$TMP_DIR/repo/asset_manager.sql" "$APP_ROOT/asset_manager.sql"
+    cp -f "$TMP_DIR/asset_manager.sql" "$APP_ROOT/asset_manager.sql"
 
-    ok "仓库主文件已同步，app 目录已从 GitHub app/ 部署完成"
+    ok "app 目录已全部从 app.zip 部署完成，asset_manager.sql 已同步"
 }
 
 setup_python_env() {
@@ -1706,18 +1696,305 @@ check_connectivity() {
     esac
 }
 
+# ==================== Let's Encrypt 证书处理 ====================
+get_public_ipv4() {
+    local ip=""
+    ip="$(ip route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
+    if [ -z "$ip" ] && command -v curl >/dev/null 2>&1; then
+        ip="$(curl -4fsS --max-time 5 https://ipv4.icanhazip.com 2>/dev/null | tr -d '[:space:]' || true)"
+    fi
+    echo "$ip"
+}
+
+find_cert_name_by_domain() {
+    local cert_domain="$1"
+    local d=""
+    if [ -f "/etc/letsencrypt/live/${cert_domain}/fullchain.pem" ] && [ -f "/etc/letsencrypt/live/${cert_domain}/privkey.pem" ]; then
+        echo "$cert_domain"
+        return 0
+    fi
+    for d in /etc/letsencrypt/live/"${cert_domain}"*; do
+        [ -d "$d" ] || continue
+        if [ -f "$d/fullchain.pem" ] && [ -f "$d/privkey.pem" ]; then
+            basename "$d"
+            return 0
+        fi
+    done
+    return 1
+}
+
+get_cert_paths() {
+    local cert_domain="$1"
+    local cert_name=""
+    cert_name="$(find_cert_name_by_domain "$cert_domain" 2>/dev/null || true)"
+    [ -n "$cert_name" ] || return 1
+    [ -f "/etc/letsencrypt/live/${cert_name}/fullchain.pem" ] || return 1
+    [ -f "/etc/letsencrypt/live/${cert_name}/privkey.pem" ] || return 1
+    echo "${cert_name}|/etc/letsencrypt/live/${cert_name}/fullchain.pem|/etc/letsencrypt/live/${cert_name}/privkey.pem"
+}
+
+cert_files_exist() {
+    get_cert_paths "$1" >/dev/null 2>&1
+}
+
+cert_is_valid() {
+    local cert_domain="$1"
+    local cert_info="" cert_file=""
+    cert_info="$(get_cert_paths "$cert_domain" 2>/dev/null || true)"
+    [ -n "$cert_info" ] || return 1
+    cert_file="$(echo "$cert_info" | cut -d'|' -f2)"
+    [ -f "$cert_file" ] || return 1
+    openssl x509 -checkend 0 -noout -in "$cert_file" >/dev/null 2>&1 || return 1
+    if openssl x509 -in "$cert_file" -noout -text 2>/dev/null | grep -A1 "Subject Alternative Name" | grep -qw "DNS:${cert_domain}"; then
+        return 0
+    fi
+    openssl x509 -in "$cert_file" -noout -subject 2>/dev/null | grep -Eq "CN[[:space:]]*=[[:space:]]*${cert_domain}([,/]|$)"
+}
+
+cert_key_matches() {
+    local cert_domain="$1"
+    local cert_info="" cert_file="" key_file="" cert_pub="" key_pub=""
+    cert_info="$(get_cert_paths "$cert_domain" 2>/dev/null || true)"
+    [ -n "$cert_info" ] || return 1
+    cert_file="$(echo "$cert_info" | cut -d'|' -f2)"
+    key_file="$(echo "$cert_info" | cut -d'|' -f3)"
+    [ -f "$cert_file" ] && [ -f "$key_file" ] || return 1
+    cert_pub="$(openssl x509 -in "$cert_file" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform pem 2>/dev/null || true)"
+    key_pub="$(openssl pkey -in "$key_file" -pubout -outform pem 2>/dev/null || true)"
+    [ -n "$cert_pub" ] && [ -n "$key_pub" ] && [ "$cert_pub" = "$key_pub" ]
+}
+
+show_local_cert_info() {
+    local cert_domain="$1"
+    local cert_info="" cert_file=""
+    cert_info="$(get_cert_paths "$cert_domain" 2>/dev/null || true)"
+    cert_file="$(echo "$cert_info" | cut -d'|' -f2)"
+    if [ -f "$cert_file" ]; then
+        echo "域名: ${cert_domain}"
+        openssl x509 -noout -subject -issuer -dates -in "$cert_file" 2>/dev/null || true
+    fi
+}
+
+ensure_certbot_installed() {
+    if command -v certbot >/dev/null 2>&1; then
+        return 0
+    fi
+    echo "未检测到 certbot，正在安装..."
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -y
+        apt-get install -y certbot
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y certbot
+    else
+        echo "❌ 未检测到 apt-get/yum，无法自动安装 certbot。"
+        return 1
+    fi
+}
+
+prepare_web_cert_for_domain() {
+    local cert_domain="$1"
+    local server_ip="" resolved_ip=""
+    echo "检查域名证书：${cert_domain}"
+
+    if cert_files_exist "$cert_domain" && cert_is_valid "$cert_domain" && cert_key_matches "$cert_domain"; then
+        echo "检测到有效 Let's Encrypt 证书，直接复用。"
+        show_local_cert_info "$cert_domain"
+        return 0
+    fi
+
+    echo "未找到可用正式证书，将自动申请 Let's Encrypt 证书。"
+    server_ip="$(get_public_ipv4)"
+    resolved_ip="$(getent ahostsv4 "$cert_domain" 2>/dev/null | awk 'NR==1{print $1}' || true)"
+    if [ -n "$server_ip" ] && [ -n "$resolved_ip" ] && [ "$server_ip" != "$resolved_ip" ]; then
+        echo "⚠️ 域名解析 IP 与本机公网 IP 可能不一致："
+        echo "   域名解析: $resolved_ip"
+        echo "   本机公网: $server_ip"
+        echo "   证书申请可能失败，请确认 DNS 已指向本机。"
+    fi
+
+    ensure_certbot_installed || return 1
+
+    # 临时停止占用 80 端口的服务（nginx / apache2）
+    systemctl stop nginx 2>/dev/null || true
+    systemctl stop apache2 2>/dev/null || true
+    sleep 2
+
+    # 使用 standalone 方式申请证书
+    if ! certbot certonly --standalone --non-interactive --agree-tos --register-unsafely-without-email -d "$cert_domain"; then
+        echo "❌ Let's Encrypt 证书申请失败。请检查域名解析、80端口、防火墙/安全组。"
+        systemctl start nginx 2>/dev/null || true
+        return 1
+    fi
+
+    systemctl start nginx 2>/dev/null || true
+
+    if cert_files_exist "$cert_domain" && cert_is_valid "$cert_domain" && cert_key_matches "$cert_domain"; then
+        echo "✅ Let's Encrypt 证书已就绪。"
+        show_local_cert_info "$cert_domain"
+        return 0
+    fi
+
+    echo "❌ 证书文件存在性/有效性/私钥匹配校验未通过。"
+    return 1
+}
+
+# ==================== 更新域名/HTTPS ====================
+update_domain() {
+    echo -e "${BLUE}=============== 更新 Web 管理端域名 ===============${NC}"
+    load_state
+    ensure_state_defaults
+
+    local current_domain="${DOMAIN:-}"
+    [ -n "$current_domain" ] && echo "当前域名: $current_domain" || echo "当前未配置域名（HTTP）"
+
+    local new_domain=""
+    while [ -z "$new_domain" ]; do
+        read -rp "请输入新域名（留空则关闭 HTTPS 并回退到 HTTP）: " new_domain
+        new_domain="$(echo "$new_domain" | tr -d '[:space:]')"
+    done
+
+    if [ -n "$current_domain" ] && [ "$new_domain" = "$current_domain" ]; then
+        echo "域名相同，无需更新。"
+        return 0
+    fi
+
+    # 如果输入了域名，确保证书就绪
+    if [ -n "$new_domain" ]; then
+        echo "准备 SSL 证书..."
+        if ! prepare_web_cert_for_domain "$new_domain"; then
+            echo -e "${RED}❌ 证书准备失败，域名更新终止。${NC}"
+            return 1
+        fi
+    fi
+
+    # ========== 新增：检测端口 2083 被哪些其他项目占用 ==========
+    echo "检查端口 ${PUBLIC_PORT} 上的其他监听配置..."
+    local other_configs=""
+    if [ -d /etc/nginx/sites-enabled ]; then
+        other_configs=$(grep -l "listen.*${PUBLIC_PORT}" /etc/nginx/sites-enabled/*.conf 2>/dev/null | grep -v "$(basename "$NGINX_SITE_LINK")" || true)
+    fi
+    if [ -n "$other_configs" ]; then
+        echo -e "${YELLOW}⚠️ 警告：以下 Nginx 配置文件也监听了端口 ${PUBLIC_PORT}：${NC}"
+        echo "$other_configs" | sed 's/^/  - /'
+        echo -e "${YELLOW}这可能导致域名访问混乱（多个项目共用同一端口）。${NC}"
+        echo -e "${YELLOW}建议您手动修改其他项目的端口，或停止它们与 ISM 的端口冲突。${NC}"
+        echo
+    fi
+
+    # 额外检测 Xray 直连（x-ui-pro 可能直接监听 2083）
+    if command -v ss >/dev/null 2>&1; then
+        local xray_pid=$(ss -lntp 2>/dev/null | grep ":${PUBLIC_PORT}" | grep -i xray | awk -F'pid=' '{print $2}' | cut -d',' -f1 | head -1)
+        if [ -n "$xray_pid" ]; then
+            echo -e "${YELLOW}⚠️ 警告：Xray 进程（PID $xray_pid）正在直接监听端口 ${PUBLIC_PORT}，可能与 ISM 的 Nginx 配置冲突。${NC}"
+            echo -e "${YELLOW}如果您希望 ISM 独占该端口，请修改 x-ui-pro 的节点配置将端口改为其他值（如 2084）。${NC}"
+            echo
+        fi
+    fi
+
+    # ========== 备份状态文件 ==========
+    local bak_suffix=".bak.$(date '+%Y%m%d_%H%M%S')"
+    cp -a "$STATE_FILE" "${STATE_FILE}${bak_suffix}" 2>/dev/null || true
+
+    # ========== 更新 DOMAIN ==========
+    DOMAIN="$new_domain"
+    save_state
+
+    # ========== 重新生成 nginx 配置（强制覆盖） ==========
+    if [ -n "$DOMAIN" ] && [ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]; then
+        cat > "$NGINX_SITE_FILE" <<EOF
+server {
+    listen ${PUBLIC_PORT} ssl;
+    server_name ${DOMAIN};
+
+    ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+    client_max_body_size 30m;
+
+    location / {
+        proxy_pass http://127.0.0.1:${INTERNAL_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 300;
+    }
+}
+EOF
+        echo -e "${GREEN}✅ 已配置 HTTPS: https://${DOMAIN}:${PUBLIC_PORT}${NC}"
+    else
+        cat > "$NGINX_SITE_FILE" <<EOF
+server {
+    listen ${PUBLIC_PORT};
+    server_name ${DOMAIN:-_};
+
+    client_max_body_size 30m;
+
+    location / {
+        proxy_pass http://127.0.0.1:${INTERNAL_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 300;
+    }
+}
+EOF
+        if [ -n "$DOMAIN" ]; then
+            echo -e "${YELLOW}⚠️ 未找到证书，已配置 HTTP: http://${DOMAIN}:${PUBLIC_PORT}${NC}"
+        else
+            local ip
+            ip="$(get_host_ip)"
+            echo -e "${YELLOW}⚠️ 未配置域名，访问: http://${ip:-服务器IP}:${PUBLIC_PORT}${NC}"
+        fi
+    fi
+
+    # 确保符号链接存在
+    ln -sf "$NGINX_SITE_FILE" "$NGINX_SITE_LINK"
+
+    # 测试配置
+    if ! nginx -t; then
+        echo -e "${RED}❌ nginx 配置测试失败，已恢复备份。${NC}"
+        cp -a "${STATE_FILE}${bak_suffix}" "$STATE_FILE" 2>/dev/null || true
+        load_state
+        return 1
+    fi
+
+    systemctl restart nginx
+
+    # 重启 ISM 服务
+    if systemctl is-enabled "$SERVICE_NAME" >/dev/null 2>&1; then
+        systemctl restart "$SERVICE_NAME"
+    fi
+
+    echo "============================================="
+    echo -e "${GREEN}✅ ISM 域名更新完成${NC}"
+    [ -n "$DOMAIN" ] && echo "ISM 访问地址: https://${DOMAIN}:${PUBLIC_PORT}/"
+    echo "旧状态备份: ${STATE_FILE}${bak_suffix}"
+    echo "============================================="
+
+    if [ -n "$other_configs" ] || [ -n "$xray_pid" ]; then
+        echo -e "${YELLOW}📢 提醒：检测到端口 ${PUBLIC_PORT} 存在其他服务的监听，可能导致域名访问不一致。${NC}"
+        echo -e "${YELLOW}   请根据上述提示手动调整其他服务的端口配置，或忽略（如果您已知晓）。${NC}"
+    fi
+}
+
+
 show_menu() {
     clear
     printf "\n"
     printf "${BOLD}${BLUE}=========================================================================${NC}\n"
-    printf "${BOLD}${WHITE}         ISM 资产管理 WebDAV / CloudDrive 管理菜单                     ${NC}\n"
+    printf "${BOLD}${WHITE}         asset_manager WebDAV / CloudDrive 管理菜单                     ${NC}\n"
     printf "${BOLD}${BLUE}=========================================================================${NC}\n"
 
     printf "${BOLD}${GREEN} [1] 安装依赖${NC}              ${WHITE}安装基础环境：Nginx / MariaDB / Python / OCR${NC}\n"
     printf "${BOLD}${RED} [2] 安装系统${NC}              ${WHITE}部署程序、初始化数据库、配置服务${NC}\n"
     printf "${BOLD}${BLUE}-------------------------------------------------------------------------${NC}\n"
 
-    printf "${BOLD}${CYAN} [3] 重启系统${NC}              ${WHITE}重启 ISM 服务${NC}\n"
+    printf "${BOLD}${CYAN} [3] 重启系统${NC}              ${WHITE}重启 asset_manager 服务${NC}\n"
     printf "${BOLD}${YELLOW} [4] 安装/重置 WebDAV${NC}      ${WHITE}首次挂载或切换新的 WebDAV 网盘${NC}\n"
     printf "${BOLD}${BLUE} [5] 安装 CloudDrive${NC}        ${WHITE}安装 CloudDrive 并写入 systemd${NC}\n"
     printf "${BOLD}${CYAN} [6] 设置系统写入路径${NC}     ${WHITE}切换到WebDAV/ CloudDrive /本地目录${NC}\n"
@@ -1726,6 +2003,7 @@ show_menu() {
     printf "${BOLD}${MAGENTA} [9] 恢复数据库${NC}            ${WHITE}从本地最新备份恢复数据库${NC}\n"
     printf "${BOLD}${RED} [10] 卸载WebDAV${NC}            ${YELLOW}移除挂载并恢复本地上传目录${NC}\n"
     printf "${BOLD}${RED} [11] 卸载 clouddrive${NC}        ${YELLOW}卸载且不删除 ${CD_MOUNT_DIR}${NC}\n"
+	printf "${BOLD}${GREEN} [12] 更新域名/HTTPS${NC}        ${WHITE}更换域名并自动申请/更新 Let's Encrypt 证书${NC}\n"   # 新增
     printf "${BOLD}${RED} [0] 退出${NC}                  ${WHITE}退出当前脚本${NC}\n"
 
     printf "${BOLD}${BLUE}-------------------------------------------------------------------------${NC}\n"
@@ -1758,6 +2036,7 @@ main() {
             9) restore_database ;;
             10) uninstall_webdav ;;
             11) uninstall_clouddrive_app ;;
+			12) update_domain ;;   # 新增
             0) exit 0 ;;
             *) warn "无效选项" ;;
         esac
