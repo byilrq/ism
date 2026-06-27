@@ -6,7 +6,7 @@
 6. 远端路径配置必须提前创建和带上/asset_manager 文件夹，系统不创建这个文件夹。比如/mnt/webdav_mount/ism_images或/mnt/CloudDrive/ism_images
 7. 主设备图片上传位置：/root/asset_manager/app/uploads/images/assets
 8. 配件图片上传位置：/root/asset_manager/app/uploads/images/accessories
-9. 数据库按照仓库的 asset_manager.sql   初始化初步数据和用户名。
+9. 数据库按照仓库的 ism.sql   初始化初步数据和用户名。
 10. 切换到 WebDAV 或 CloudDrive，脚本会把 config.py 里的 UPLOAD_FOLDER 改成对应挂载目录；但数据库本体仍然在本机 MariaDB，只是备份和图片会按你选择的存储方式同步/写入。
    
 
