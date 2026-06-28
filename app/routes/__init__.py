@@ -66,8 +66,6 @@ def normalize_status_value(value):
     if value is None:
         return ""
     value = str(value).strip()
-    if value == "维修":
-        return "计量"
     return value
 
 
@@ -85,9 +83,6 @@ def get_statuses():
             continue
         status_items.append(SimpleNamespace(dict_value=status_value))
         seen.add(status_value)
-
-    if "其它" not in seen:
-        status_items.append(SimpleNamespace(dict_value="其它"))
 
     return status_items
 
@@ -560,6 +555,8 @@ def delete_asset_with_files(asset):
         delete_image_file(img.image_path)
     db.session.delete(asset)
 
+
+
 def build_search_rows(keyword="", searched=False):
     if not searched:
         return []
@@ -638,6 +635,8 @@ def build_search_rows(keyword="", searched=False):
     is_group_accessory_keyword = bool(re.fullmatch(r"\d{18}-\d+", keyword))
     is_precise_group_keyword = is_group_asset_keyword or is_group_accessory_keyword
 
+    # 完整集团编号按完整编号检索，避免 18 位编号因后 6 位相同误命中其他主资产。
+    # 普通关键词仍保留原来的后 6 位编号检索。
     suffix_keyword = "" if is_precise_group_keyword else (keyword[-6:] if len(keyword) >= 6 else "")
 
     exact_assets = Asset.query.filter(
@@ -661,13 +660,10 @@ def build_search_rows(keyword="", searched=False):
         if a.id not in asset_ids:
             asset_ids.append(a.id)
 
+    # 备注支持关键词模糊搜索；为避免短关键词误伤，至少连续 2 个字符才启用备注匹配。
+    # 完整集团编号搜索时，只保留备注模糊匹配，不再按责任人/位置模糊匹配。
     remark_search_enabled = len(keyword) >= 2
-
-    # ---------- 主设备检索条件 ----------
     owner_asset_conditions = []
-    # 名称检索始终启用（只要有关键词）
-    if keyword:
-        owner_asset_conditions.append(Asset.name.like(f"%{keyword}%"))
     if not is_precise_group_keyword:
         owner_asset_conditions.extend([
             Asset.owner.like(f"%{keyword}%"),
@@ -684,7 +680,6 @@ def build_search_rows(keyword="", searched=False):
         if a.id not in asset_ids:
             asset_ids.append(a.id)
 
-    # ---------- 配件检索条件 ----------
     exact_accessories = Accessory.query.filter(
         or_(
             Accessory.sub_internal_no == keyword,
@@ -702,8 +697,6 @@ def build_search_rows(keyword="", searched=False):
         ).all()
 
     owner_accessory_conditions = []
-    if keyword:
-        owner_accessory_conditions.append(Accessory.name.like(f"%{keyword}%"))
     if not is_precise_group_keyword:
         owner_accessory_conditions.extend([
             Accessory.owner.like(f"%{keyword}%"),
@@ -742,7 +735,6 @@ def build_search_rows(keyword="", searched=False):
                 standalone_accessories.append(acc)
                 standalone_accessory_ids.add(acc.id)
 
-    # 主设备及挂载配件
     if asset_ids:
         matched_assets = sorted(Asset.query.filter(Asset.id.in_(asset_ids)).all(), key=get_asset_sort_key)
 
@@ -807,7 +799,6 @@ def build_search_rows(keyword="", searched=False):
                 "asset_date_text": item.asset_date.isoformat() if item.asset_date else ""
             })
 
-    # 最终兜底：没有任何关联主设备的配件，单独显示
     if not rows:
         standalone_conditions = [
             Accessory.sub_internal_no == keyword,
@@ -815,8 +806,6 @@ def build_search_rows(keyword="", searched=False):
             Accessory.sub_internal_no.like(f"{keyword}-%"),
             Accessory.sub_group_no.like(f"{keyword}-%"),
         ]
-        # 配件名称检索始终启用
-        standalone_conditions.append(Accessory.name.like(f"%{keyword}%"))
         if not is_precise_group_keyword:
             standalone_conditions.extend([
                 Accessory.owner.like(f"%{keyword}%"),
@@ -857,9 +846,6 @@ def build_search_rows(keyword="", searched=False):
             return build_search_rows(keyword=parent_search_keyword, searched=True)
 
     return rows
-
-
-
 
 
     exact_assets = Asset.query.filter(
@@ -2431,9 +2417,17 @@ def register_routes(app):
             }
 
             if device_type == "主设备":
-                number_error = validate_required_number_pair(internal_no, group_no, "内部编号", "集团编号")
-                if not number_error:
-                    number_error = validate_asset_group_no(group_no, "集团编号")
+                if status == "开箱":
+                    number_error = ""
+                    if group_no:
+                        number_error = validate_asset_group_no(group_no, "集团编号")
+                    if not internal_no:
+                        internal_no = datetime.now().strftime("%Y%m%d%H%M")
+                        form_data["internal_no"] = internal_no
+                else:
+                    number_error = validate_required_number_pair(internal_no, group_no, "内部编号", "集团编号")
+                    if not number_error:
+                        number_error = validate_asset_group_no(group_no, "集团编号")
             else:
                 number_error = validate_required_number_pair(internal_no, group_no, "附属资产内部编号", "附属资产集团编号")
                 if not number_error:
@@ -2578,9 +2572,16 @@ def register_routes(app):
                 image_files = request.files.getlist("image_files")
                 delete_image_ids = request.form.getlist("delete_asset_image_ids")
 
-                number_error = validate_required_number_pair(internal_no, group_no, "内部编号", "集团编号")
-                if not number_error:
-                    number_error = validate_asset_group_no(group_no, "集团编号")
+                if status == "开箱":
+                    number_error = ""
+                    if group_no:
+                        number_error = validate_asset_group_no(group_no, "集团编号")
+                    if not internal_no:
+                        internal_no = datetime.now().strftime("%Y%m%d%H%M")
+                else:
+                    number_error = validate_required_number_pair(internal_no, group_no, "内部编号", "集团编号")
+                    if not number_error:
+                        number_error = validate_asset_group_no(group_no, "集团编号")
 
                 if number_error:
                     error = number_error
@@ -3183,13 +3184,13 @@ function confirmDeleteSelected(){
             <div class="action-bar">
                 <input type="text" name="keyword" value="{{ keyword }}" placeholder="编号/后6位、责任人、位置、备注">
                 <select name="status_filter">
-                    <option value="">状态</option>
+                    <option value="" disabled selected>状态</option>
                     {% for s in statuses %}
                     <option value="{{ s.dict_value }}" {% if status_filter == s.dict_value %}selected{% endif %}>{{ s.dict_value }}</option>
                     {% endfor %}
                 </select>
                 <select name="device_type_filter">
-                    <option value="">类型</option>
+                    <option value="" disabled selected>类型</option>
                     <option value="主设备" {% if device_type_filter == '主设备' %}selected{% endif %}>主设备</option>
                     <option value="配件" {% if device_type_filter == '配件' %}selected{% endif %}>配件</option>
                 </select>
@@ -4879,6 +4880,13 @@ function validateAccessoryGroupNoValue(value){
 
 function confirmDeviceSave(form){
     const deviceType = (form.querySelector('[name="device_type"]') || {}).value || '主设备';
+    const statusEl = form.querySelector('[name="status"]');
+    const isUnboxing = statusEl && statusEl.value === '开箱';
+    if(isUnboxing && deviceType === '主设备'){
+        const groupNo = ((form.querySelector('[name="group_no"]') || {}).value || '').trim();
+        if(groupNo){ const msg = validateAssetGroupNoValue(groupNo); if(msg){ alert(msg); return false; } }
+        return confirm('确认保存吗？');
+    }
     const groupNo = ((form.querySelector('[name="group_no"]') || {}).value || '').trim();
     const message = deviceType === '配件' ? validateAccessoryGroupNoValue(groupNo) : validateAssetGroupNoValue(groupNo);
     if(message){
@@ -4995,7 +5003,7 @@ function updateSelectedFiles(inputId, textId, dialogId){
             <h2 style="margin:0;">新增设备</h2>
             <a href="/"><button type="button" class="btn-return-secondary" style="width:auto;min-width:108px;">返回</button></a>
         </div>
-        <div style="color:#666;margin-bottom:10px;">内部编号和集团编号至少填写一个。新增配件时，已自动带出主设备编号前缀。</div>
+        <div style="color:#666;margin-bottom:10px;">内部编号和集团编号至少填写一个。选择"开箱"状态时，集团编号和内部编号均可空，内部编号留空将自动填入12位时间戳。</div>
         {% if error %}<div class="err">{{ error }}</div>{% endif %}
         <form method="post" enctype="multipart/form-data">
             <input type="hidden" name="parent_asset_id" value="{{ form_data.parent_asset_id }}">
@@ -5175,7 +5183,17 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 </style>
 <script>
 function validateAssetGroupNoValue(value){ value = (value || '').trim(); if(!value){ return ''; } return /^\\d{18}$/.test(value) ? '' : '集团编号必须为18位数字'; }
-function confirmAssetSave(form){ const groupNo = ((form.querySelector('[name="group_no"]') || {}).value || '').trim(); const message = validateAssetGroupNoValue(groupNo); if(message){ alert(message); return false; } return confirm('确认保存吗？'); }
+function isStatusUnboxing(form){ const statusEl = form.querySelector('[name="status"]'); return statusEl && statusEl.value === '开箱'; }
+function confirmAssetSave(form){
+    if(isStatusUnboxing(form)){
+        const groupNo = ((form.querySelector('[name="group_no"]') || {}).value || '').trim();
+        if(groupNo){ const msg = validateAssetGroupNoValue(groupNo); if(msg){ alert(msg); return false; } }
+        return confirm('确认保存吗？');
+    }
+    const groupNo = ((form.querySelector('[name="group_no"]') || {}).value || '').trim();
+    const message = validateAssetGroupNoValue(groupNo); if(message){ alert(message); return false; }
+    return confirm('确认保存吗？');
+}
 function beginEdit(formId, buttonId){ const form = document.getElementById(formId); if(!form){ return false; } const fields = form.querySelectorAll('.edit-field'); fields.forEach(el => { el.disabled = false; el.classList.remove('readonly'); }); const button = document.getElementById(buttonId); if(button){ button.textContent = '确认'; button.setAttribute('data-mode', 'save'); } return false; }
 function handleEditOrSave(formId, buttonId){ const button = document.getElementById(buttonId); if(!button){ return false; } const mode = button.getAttribute('data-mode') || 'edit'; if(mode === 'save'){ const form = document.getElementById(formId); if(form){ if(form.requestSubmit){ form.requestSubmit(); } else { form.submit(); } } return false; } return beginEdit(formId, buttonId); }
 function openUploadChooser(dialogId, triggerEl){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.add('show'); } }
@@ -5406,7 +5424,7 @@ function requestInventory(formId, message){
                 <div class="row"><label>责任人</label><input class="edit-field readonly" disabled type="text" name="owner" value="{{ asset.owner or '' }}"></div>
                 <div class="row"><label>位置</label><input class="edit-field readonly" disabled type="text" name="location" value="{{ asset.location or '' }}"></div>
                 <div class="row"><label>时间</label><input class="readonly" disabled type="date" value="{{ asset.asset_date.isoformat() if asset.asset_date else today }}"></div>
-                <div class="row"><label>状态</label><select class="edit-field readonly" disabled name="status"><option value="">请选择</option>{% for s in statuses %}<option value="{{ s.dict_value }}" {% if (asset.status or '') == s.dict_value or ((asset.status or '') == '维修' and s.dict_value == '计量') %}selected{% endif %}>{{ s.dict_value }}</option>{% endfor %}</select></div>
+                <div class="row"><label>状态</label><select class="edit-field readonly" disabled name="status"><option value="">请选择</option>{% for s in statuses %}<option value="{{ s.dict_value }}" {% if (asset.status or '') == s.dict_value %}selected{% endif %}>{{ s.dict_value }}</option>{% endfor %}</select></div>
                 <div class="row">
                     <label>上传图片（最多5张）</label>
                     <div class="upload-actions"><button type="button" class="edit-field readonly" disabled onclick=\"openUploadChooser('asset-upload-choice-dialog', this)\">上传图片</button></div>
@@ -5826,7 +5844,7 @@ function requestInventory(formId, message){
                 <div class="row"><label>责任人</label><input class="edit-field readonly" disabled type="text" name="owner" value="{{ accessory.owner or '' }}"></div>
                 <div class="row"><label>位置</label><input class="edit-field readonly" disabled type="text" name="location" value="{{ accessory.location or '' }}"></div>
                 <div class="row"><label>时间</label><input class="edit-field readonly" disabled type="date" name="asset_date" value="{{ accessory.asset_date.isoformat() if accessory.asset_date else '' }}"></div>
-                <div class="row"><label>状态</label><select class="edit-field readonly" disabled name="status"><option value="">请选择</option>{% for s in statuses %}<option value="{{ s.dict_value }}" {% if (accessory.status or '') == s.dict_value or ((accessory.status or '') == '维修' and s.dict_value == '计量') %}selected{% endif %}>{{ s.dict_value }}</option>{% endfor %}</select></div>
+                <div class="row"><label>状态</label><select class="edit-field readonly" disabled name="status"><option value="">请选择</option>{% for s in statuses %}<option value="{{ s.dict_value }}" {% if (accessory.status or '') == s.dict_value %}selected{% endif %}>{{ s.dict_value }}</option>{% endfor %}</select></div>
                 <div class="row">
                     <label>上传图片（最多5张）</label>
                     <div class="upload-actions"><button type="button" class="edit-field readonly" disabled onclick=\"openUploadChooser('accessory-upload-choice-dialog', this)\">上传图片</button></div>
