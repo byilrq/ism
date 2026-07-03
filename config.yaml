@@ -1,0 +1,13 @@
+secret_key: e345ede60e6e
+mysql:
+  host: localhost
+  port: 3306
+  database: ism
+  user: asset_user
+  password: by123
+upload_folder: /root/ism/app/uploads
+max_content_length: 20971520
+
+admin:
+  username: admin
+  password: Plex0819$

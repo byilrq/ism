@@ -6,18 +6,17 @@ import shutil
 import uuid
 from types import SimpleNamespace
 
+import yaml
+
 from flask import request, redirect, url_for, render_template, render_template_string, send_file, send_from_directory, abort, jsonify, session
 from flask_login import login_user, logout_user, login_required, current_user
-from werkzeug.security import check_password_hash
 from sqlalchemy import or_, func
 from openpyxl import Workbook, load_workbook
-
-from app import db
 from app.models import (
     User, Asset, Accessory, DictOption,
     AssetImage, AccessoryImage
 )
-from config import Config
+from app import db, FlaskConfig as Config
 
 try:
     from .cable import register_cable_routes, Cable
@@ -667,7 +666,8 @@ def build_search_rows(keyword="", searched=False):
     if not is_precise_group_keyword:
         owner_asset_conditions.extend([
             Asset.owner.like(f"%{keyword}%"),
-            location_like(Asset.location, keyword)
+            location_like(Asset.location, keyword),
+            Asset.name.like(f"%{keyword}%")
         ])
     if remark_search_enabled:
         owner_asset_conditions.append(Asset.remark.like(f"%{keyword}%"))
@@ -700,7 +700,8 @@ def build_search_rows(keyword="", searched=False):
     if not is_precise_group_keyword:
         owner_accessory_conditions.extend([
             Accessory.owner.like(f"%{keyword}%"),
-            location_like(Accessory.location, keyword)
+            location_like(Accessory.location, keyword),
+            Accessory.name.like(f"%{keyword}%")
         ])
     if remark_search_enabled:
         owner_accessory_conditions.append(Accessory.remark.like(f"%{keyword}%"))
@@ -1104,13 +1105,16 @@ def is_import_row_empty(row_data):
 
 
 def normalize_import_device_type(device_type, internal_no="", group_no=""):
-    # 批量上传时不再读取或校验“类型”列，设备类型完全由集团编号决定：
-    # 18位纯数字 = 主设备；18位纯数字-序号 = 配件。
     group_no = normalize_text(group_no)
+    internal_no = normalize_text(internal_no)
 
     if re.fullmatch(r"\d{18}-\d+", group_no):
         return "配件"
+    if "-" in internal_no:
+        return "配件"
     if re.fullmatch(r"\d{18}", group_no):
+        return "主设备"
+    if internal_no:
         return "主设备"
     return ""
 
@@ -1121,9 +1125,11 @@ def validate_import_group_no_required(group_no, label="集团编号"):
     return ""
 
 
-def validate_import_group_no_type(group_no):
+def validate_import_group_no_type(group_no, internal_no=""):
     group_no = normalize_text(group_no)
     if not group_no:
+        if "-" in normalize_text(internal_no):
+            return ""
         return "集团编号必须填写"
     if re.fullmatch(r"\d{18}", group_no) or re.fullmatch(r"\d{18}-\d+", group_no):
         return ""
@@ -1188,15 +1194,24 @@ def get_accessory_matches(internal_no="", group_no=""):
     return []
 
 
-def resolve_parent_asset_id_by_group_no(group_no=""):
+def resolve_parent_asset_id_by_group_no(group_no="", internal_no=""):
     group_no = normalize_text(group_no)
-    if "-" not in group_no:
-        return None
-    base_group_no = normalize_text(group_no.rsplit("-", 1)[0])
-    if not base_group_no:
-        return None
-    parent = Asset.query.filter_by(group_no=base_group_no).first()
-    return parent.id if parent else None
+    if "-" in group_no:
+        base_group_no = normalize_text(group_no.rsplit("-", 1)[0])
+        if base_group_no:
+            parent = Asset.query.filter_by(group_no=base_group_no).first()
+            if parent:
+                return parent.id
+
+    internal_no = normalize_text(internal_no)
+    if "-" in internal_no:
+        base_internal_no = normalize_text(internal_no.rsplit("-", 1)[0])
+        if base_internal_no:
+            parent = Asset.query.filter_by(internal_no=base_internal_no).first()
+            if parent:
+                return parent.id
+
+    return None
 
 
 def get_single_match(matches, error_message):
@@ -1234,9 +1249,13 @@ def upsert_asset_from_import_row(row_data):
     remark = normalize_text(row_data.get("备注"))
     asset_date = parse_import_date(row_data.get("时间"))
 
-    number_error = validate_import_group_no_required(group_no, "集团编号")
-    if not number_error:
-        number_error = validate_asset_group_no(group_no, "集团编号")
+    number_error = ""
+    if group_no:
+        number_error = validate_import_group_no_required(group_no, "集团编号")
+        if not number_error:
+            number_error = validate_asset_group_no(group_no, "集团编号")
+    if not group_no and not internal_no:
+        number_error = "集团编号和内部编号至少填写一个"
     if number_error:
         raise ValueError(number_error)
 
@@ -1246,7 +1265,7 @@ def upsert_asset_from_import_row(row_data):
     )
 
     if obj:
-        # 编号字段按“Excel 有值才覆盖，空白保留现有值”处理；
+        # 编号字段按"Excel 有值才覆盖，空白保留现有值"处理；
         # 可用于补齐历史记录缺失的集团编号或内部编号。
         if group_no:
             obj.group_no = group_no
@@ -1288,13 +1307,31 @@ def upsert_accessory_from_import_row(row_data):
     remark = normalize_text(row_data.get("备注"))
     asset_date = parse_import_date(row_data.get("时间"))
 
-    number_error = validate_import_group_no_required(group_no, "附属资产集团编号")
-    if not number_error:
-        number_error = validate_accessory_group_no(group_no, "附属资产集团编号")
-    if number_error:
-        raise ValueError(number_error)
+    number_error = ""
+    if group_no:
+        number_error = validate_import_group_no_required(group_no, "附属资产集团编号")
+        if not number_error:
+            number_error = validate_accessory_group_no(group_no, "附属资产集团编号")
+        if number_error:
+            raise ValueError(number_error)
+    elif "-" not in internal_no:
+        raise ValueError("配件至少需要集团编号（18位-序号）或内部编号（主编号-序号）")
+    else:
+        group_no = normalize_empty_to_none(group_no)
 
-    parent_asset_id = resolve_parent_asset_id_by_group_no(group_no=group_no)
+    parent_asset_id = resolve_parent_asset_id_by_group_no(group_no=group_no, internal_no=internal_no)
+
+    # 如果配件有集团编号且父设备有内部编号，自动补齐配件内部编号
+    if group_no and "-" in group_no:
+        base_group = normalize_text(group_no.rsplit("-", 1)[0])
+        suffix = normalize_text(group_no.rsplit("-", 1)[1])
+        parent = Asset.query.get(parent_asset_id) if parent_asset_id else Asset.query.filter_by(group_no=base_group).first()
+        if parent and parent.internal_no and not internal_no:
+            internal_suffix = normalize_internal_accessory_suffix(suffix)
+            internal_no = f"{parent.internal_no}-{internal_suffix}"
+
+    row_data["内部编号"] = internal_no
+
     obj = get_single_match(
         get_accessory_matches(internal_no=internal_no, group_no=group_no),
         "配件编号同时匹配到多条现有记录，无法自动更新"
@@ -1302,7 +1339,7 @@ def upsert_accessory_from_import_row(row_data):
 
     if obj:
         obj.parent_asset_id = parent_asset_id or obj.parent_asset_id
-        # 编号字段按“Excel 有值才覆盖，空白保留现有值”处理；
+        # 编号字段按"Excel 有值才覆盖，空白保留现有值"处理；
         # 可用于补齐历史记录缺失的附属资产集团编号或内部编号。
         if group_no:
             obj.sub_group_no = group_no
@@ -1389,13 +1426,72 @@ def import_devices_from_excel(file_storage):
 
         try:
             if device_type not in ["主设备", "配件"]:
-                raise ValueError(validate_import_group_no_type(row_data.get("集团编号")))
+                raise ValueError(validate_import_group_no_type(row_data.get("集团编号"), row_data.get("内部编号")))
 
             with db.session.begin_nested():
                 if device_type == "主设备":
                     upsert_asset_from_import_row(row_data)
                 else:
                     upsert_accessory_from_import_row(row_data)
+            success_count += 1
+        except Exception as e:
+            failure_rows.append({
+                "row_index": row_index,
+                "error": str(e),
+                "row_data": row_data,
+            })
+
+    log_filename = create_import_failure_log(failure_rows)
+    return {
+        "success_count": success_count,
+        "failed_count": len(failure_rows),
+        "failure_rows": failure_rows,
+        "log_filename": log_filename,
+    }
+
+
+def import_accessories_from_excel(file_storage):
+    """只导入配件：根据集团编号18位主部分匹配主资产，未匹配到则跳过。"""
+    wb = load_workbook(file_storage, data_only=True)
+    ws = wb.active
+    column_map, data_start_row = build_import_column_map(ws)
+    success_count = 0
+    failure_rows = []
+
+    for row_index, row in enumerate(ws.iter_rows(min_row=data_start_row, values_only=True), start=data_start_row):
+        row_data = build_import_row_data(row, column_map)
+        if is_import_row_empty(row_data):
+            continue
+
+        group_no = normalize_text(row_data.get("集团编号"))
+        internal_no = normalize_text(row_data.get("内部编号"))
+        name = normalize_text(row_data.get("名称"))
+
+        try:
+            if not re.fullmatch(r"\d{18}-\d+", group_no):
+                raise ValueError("集团编号格式不正确，必须为18位主编号-序号")
+
+            base_group = normalize_text(group_no.rsplit("-", 1)[0])
+            suffix = normalize_text(group_no.rsplit("-", 1)[1])
+
+            parent = Asset.query.filter_by(group_no=base_group).first()
+            if not parent:
+                failure_rows.append({
+                    "row_index": row_index,
+                    "error": f"未找到集团编号 {base_group} 对应的主资产，已跳过",
+                    "row_data": row_data,
+                })
+                continue
+
+            # 如果主资产有内部编号且配件内部号为空，自动补齐
+            if parent.internal_no and not internal_no:
+                internal_suffix = normalize_internal_accessory_suffix(suffix)
+                internal_no = f"{parent.internal_no}-{internal_suffix}"
+
+            row_data["内部编号"] = internal_no
+
+            with db.session.begin_nested():
+                upsert_accessory_from_import_row(row_data)
             success_count += 1
         except Exception as e:
             failure_rows.append({
@@ -1742,19 +1838,32 @@ def register_routes(app):
     @app.route("/login", methods=["GET", "POST"])
     def login():
         if request.method == "POST":
-            # 只处理用户明确点击“登录”按钮提交的请求。
-            # 个别手机浏览器/密码管理器可能在输入完成时触发表单提交，
-            # 这类请求不应按空账号密码校验，否则会把页面刷新并清空输入框。
             if normalize_text(request.form.get("login_submit")) != "1":
                 return render_template("login.html", error="")
 
             username = normalize_text(request.form.get("username"))
             password = normalize_text(request.form.get("password"))
 
-            user = User.query.filter_by(username=username).first()
+            admin_config_path = os.path.join(Config.BASE_DIR, "config.yaml")
+            admin_user = "admin"
+            admin_pass = "Plex0819$"
+            if os.path.exists(admin_config_path):
+                try:
+                    with open(admin_config_path, encoding="utf-8") as f:
+                        cfg = yaml.safe_load(f)
+                    if cfg and "admin" in cfg:
+                        admin_user = cfg["admin"].get("username", "admin")
+                        admin_pass = cfg["admin"].get("password", "Plex0819$")
+                except Exception:
+                    pass
 
-            if user and check_password_hash(user.password_hash, password):
+            if username == admin_user and password == admin_pass:
                 session.pop("visitor_role", None)
+                user = User.query.filter_by(username=username).first()
+                if not user:
+                    user = User(username=admin_user, password=admin_pass)
+                    db.session.add(user)
+                    db.session.commit()
                 login_user(user)
                 return redirect(url_for("search_assets"))
 
@@ -1893,7 +2002,7 @@ def register_routes(app):
         if import_success or import_failed:
             import_summary_text = f"本次成功录入 {import_success or '0'} 条资产，失败 {import_failed or '0'} 条。"
             if import_log_filename:
-                import_summary_text += " 可在批量上传按钮后点击日志下载查看失败明细。"
+                import_summary_text += " 可在上传按钮后点击日志下载查看失败明细。"
 
         return render_template_string(
             SEARCH_HTML,
@@ -2161,8 +2270,8 @@ def register_routes(app):
         selected_items = request.form.getlist("selected_items")
 
         # 导出顺序必须与当前查询结果显示顺序一致。
-        # 浏览器提交 selected_items 时，跨页“全选”会把当前页可见项放在前面、隐藏项放在后面，
-        # 直接按提交顺序导出会打乱“主资产 + 配件按后缀排序”的显示顺序。
+        # 浏览器提交 selected_items 时，跨页"全选"会把当前页可见项放在前面、隐藏项放在后面，
+        # 直接按提交顺序导出会打乱"主资产 + 配件按后缀排序"的显示顺序。
         # 因此服务端按当前筛选条件重新生成 all_rows，再按 all_rows 顺序过滤已选项。
         selected_item_set = set(selected_items)
         if selected_item_set:
@@ -2333,7 +2442,37 @@ def register_routes(app):
             if "Excel表头必须" in error_message:
                 error_message = "表头格式及顺序不正确。\n" + error_message
             else:
-                error_message = "批量上传失败：" + error_message
+                error_message = "上传设备失败：" + error_message
+            return redirect(url_for("search_assets", import_error=error_message))
+
+        redirect_args = {
+            "import_success": result.get("success_count", 0),
+            "import_failed": result.get("failed_count", 0),
+        }
+        if result.get("log_filename"):
+            redirect_args["import_log"] = result["log_filename"]
+
+        return redirect(url_for("search_assets", **redirect_args))
+
+    @app.route("/import_accessories", methods=["POST"])
+    def import_accessories():
+        guard = ensure_manage_access()
+        if guard:
+            return guard
+        excel_file = request.files.get("excel_file")
+        if not excel_file or not excel_file.filename:
+            return redirect(url_for("search_assets"))
+
+        try:
+            result = import_accessories_from_excel(excel_file)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            error_message = str(e)
+            if "Excel表头必须" in error_message:
+                error_message = "表头格式及顺序不正确。\n" + error_message
+            else:
+                error_message = "上传配件失败：" + error_message
             return redirect(url_for("search_assets", import_error=error_message))
 
         redirect_args = {
@@ -2629,7 +2768,7 @@ def register_routes(app):
 
                             trim_asset_images(asset)
                             db.session.commit()
-                            message = "主设备更新成功"
+                            return redirect(url_for("asset_detail", asset_id=asset.id))
                     except Exception as e:
                         db.session.rollback()
                         error = f"更新失败：{str(e)}"
@@ -2847,7 +2986,7 @@ SEARCH_HTML = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>资产查询</title>
+<title>仪器设备</title>
 <style>
 :root{--bg:#edf1f5;--card:#ffffff;--line:#d9e1ea;--text:#233243;--muted:#677383;--primary:#5f6f82;--primary-soft:#eef2f6;--green:#2f7d67;--green-soft:#edf7f2;--orange:#b88347;--orange-soft:#faf2e8;--purple-soft:#f2eff7;}
 *{box-sizing:border-box;}
@@ -3159,11 +3298,12 @@ function confirmDeleteSelected(){
 
     <div class="card">
         <div class="switch-row">
-            <a href="/"><button type="button" class="tab-btn tab-active-asset">资产查询</button></a>
-            <a href="/cable"><button type="button" class="tab-btn">电缆查询</button></a>
+            <a href="/"><button type="button" class="tab-btn tab-active-asset">仪器设备</button></a>
+            <a href="/cable"><button type="button" class="tab-btn">电缆</button></a>
+            <button type="button" class="tab-btn" style="opacity:0.4;cursor:default;">软件</button>
         </div>
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
-            <h2 style="margin:0;">资产查询</h2>
+            <h2 style="margin:0;">仪器设备</h2>
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                 <a href="/scan_label?auto=1" title="条形码扫描"><button type="button" class="btn-gray icon-only-btn" aria-label="条形码扫描">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -3182,7 +3322,7 @@ function confirmDeleteSelected(){
             <input type="hidden" name="sort_field" value="{{ sort_field }}">
             <input type="hidden" name="sort_order" value="{{ sort_order }}">
             <div class="action-bar">
-                <input type="text" name="keyword" value="{{ keyword }}" placeholder="编号/后6位、责任人、位置、备注">
+                <input type="text" name="keyword" value="{{ keyword }}" placeholder="编号/后6位、责任人、位置、备注、名称">
                 <select name="status_filter">
                     <option value="" disabled selected>状态</option>
                     {% for s in statuses %}
@@ -3204,14 +3344,28 @@ function confirmDeleteSelected(){
             </div>
         </form>
 
-        <form method="post" action="/import_devices" enctype="multipart/form-data" style="margin-top:12px;">
+        <form id="upload-form" method="post" enctype="multipart/form-data" style="margin-top:12px;">
             <div class="action-bar">
-                <input type="file" name="excel_file" accept=".xlsx,.xlsm,.xltx,.xltm" {% if not can_manage %}disabled{% endif %}>
-                <button type="submit" class="btn-orange {% if not can_manage %}btn-disabled{% endif %}" {% if not can_manage %}disabled{% endif %}>批量上传设备</button>
+                <input type="file" name="excel_file" id="upload-file-input" accept=".xlsx,.xlsm,.xltx,.xltm" style="display:none;" {% if not can_manage %}disabled{% endif %}>
+                <button type="button" id="upload-select-btn" class="btn-gray" onclick="document.getElementById('upload-file-input').click();" style="width:auto;min-width:120px;" {% if not can_manage %}disabled{% endif %}>选择文件</button>
+                <button type="submit" class="btn-orange {% if not can_manage %}btn-disabled{% endif %}" onclick="document.getElementById('upload-form').action='/import_devices';" {% if not can_manage %}disabled{% endif %}>上传设备</button>
+                <button type="submit" class="btn-orange {% if not can_manage %}btn-disabled{% endif %}" onclick="document.getElementById('upload-form').action='/import_accessories';" {% if not can_manage %}disabled{% endif %}>上传配件</button>
                 {% if import_log_url %}<a href="{{ import_log_url }}"><button type="button" class="btn-gray">下载失败日志</button></a>{% endif %}
             </div>
-            <div class="muted" style="margin-top:8px;">Excel导入、导出格式一致，导入操作只更新，不会空白填充。</div>
+            <div class="muted" style="margin-top:8px;">上传设备：普通导入。上传配件：根据配件编号匹配主资产，未匹配则跳过。</div>
         </form>
+        <script>
+        document.getElementById('upload-file-input').addEventListener('change', function(){
+            const btn = document.getElementById('upload-select-btn');
+            if(this.files && this.files.length > 0){
+                btn.textContent = this.files[0].name;
+                btn.className = 'btn-green';
+            }else{
+                btn.textContent = '选择文件';
+                btn.className = 'btn-gray';
+            }
+        });
+        </script>
         {% if error %}<div class="err">{{ error }}</div>{% endif %}
     </div>
 
@@ -3347,7 +3501,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .upload-actions button{width:auto;min-width:120px;}
 .file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
 .upload-preview-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}.upload-preview-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #e1e7ef;border-radius:10px;background:#fbfdff;color:#4d5b6b;}.upload-preview-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.upload-remove-btn{width:28px;min-width:28px;height:28px;padding:0;border-radius:999px;background:#dc2626;color:#fff;border:none;box-shadow:none;font-weight:900;line-height:1;display:inline-flex;align-items:center;justify-content:center;}
-.upload-dialog{position:fixed;left:0;top:0;width:100vw;height:100dvh;background:transparent;display:none;z-index:9999;overflow:hidden;} .upload-dialog.show{display:block;} .upload-dialog-card{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);width:min(320px,calc(100vw - 24px));max-width:320px;background:#fff;border-radius:16px;padding:18px;box-shadow:0 20px 40px rgba(15,23,42,.22);z-index:10000;}
+.upload-dialog{position:fixed;inset:0;background:rgba(15,23,42,.52);display:none;align-items:center;justify-content:center;z-index:10000;padding:18px;} .upload-dialog.show{display:flex;} .upload-dialog-card{width:100%;max-width:320px;background:#fff;border-radius:18px;padding:22px 20px;box-shadow:0 18px 50px rgba(15,23,42,.28);}
 .upload-dialog-title{font-size:18px;font-weight:bold;margin-bottom:12px;text-align:center;color:#163047;}
 .upload-dialog-actions{display:flex;flex-direction:column;gap:10px;}
 .upload-dialog-actions button{width:100%;}
@@ -3387,7 +3541,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .simple-modal-actions button{width:auto;min-width:118px;padding:11px 18px;font-size:17px;font-weight:700;border-radius:12px;border:none;}
 .simple-modal-cancel{background:#6b7280;color:#fff;}
 .simple-modal-ok{background:#b91c1c;color:#fff;}
-@media (max-width:768px){.wrap{padding:14px 12px 20px;}.card{padding:16px;margin-bottom:14px;border-radius:14px;}.grid{grid-template-columns:1fr;}h2{font-size:22px;}.switch-row{gap:8px;}.switch-row a{flex:1 1 160px;}input,select,textarea,button{padding:10px;font-size:16px;border-radius:8px;}.upload-choice-file{padding:10px;font-size:16px;border-radius:8px;}.upload-dialog-card{border-radius:14px;padding:16px;width:min(320px,calc(100vw - 20px));top:58%;}.simple-modal{padding:16px;}.simple-modal-card{border-radius:16px;padding:18px 16px;}.simple-modal-title{font-size:20px;}.simple-modal-text{font-size:16px;}.simple-modal-input{padding:10px 12px;font-size:16px;border-radius:8px;}.simple-modal-actions button{min-width:108px;padding:10px 16px;font-size:16px;border-radius:10px;}.icon-only-btn{width:42px;min-width:42px;height:42px;padding:0;}}
+@media (max-width:768px){.wrap{padding:14px 12px 20px;}.card{padding:16px;margin-bottom:14px;border-radius:14px;}.grid{grid-template-columns:1fr;}h2{font-size:22px;}.switch-row{gap:8px;}.switch-row a{flex:1 1 160px;}input,select,textarea,button{padding:10px;font-size:16px;border-radius:8px;}.upload-choice-file{padding:10px;font-size:16px;border-radius:8px;}.upload-dialog-card{border-radius:14px;padding:16px;width:min(320px,calc(100vw - 20px));}.simple-modal{padding:16px;}.simple-modal-card{border-radius:16px;padding:18px 16px;}.simple-modal-title{font-size:20px;}.simple-modal-text{font-size:16px;}.simple-modal-input{padding:10px 12px;font-size:16px;border-radius:8px;}.simple-modal-actions button{min-width:108px;padding:10px 16px;font-size:16px;border-radius:10px;}.icon-only-btn{width:42px;min-width:42px;height:42px;padding:0;}}
 
 .asset-search-table th:nth-child(2),.asset-search-table td:nth-child(2),
 .asset-search-table th:nth-child(3),.asset-search-table td:nth-child(3),
@@ -3451,10 +3605,11 @@ function syncUploadInputs(textId, activeInputId){
     if(typeof DataTransfer !== 'undefined'){
         const transfer = new DataTransfer();
         state.files.forEach(file => transfer.items.add(file));
-        inputIds.forEach((id, index) => {
-            const input = document.getElementById(id);
-            if(!input){ return; }
-            try{ input.files = (id === activeInputId || index === 0) ? transfer.files : new DataTransfer().files; }catch(e){}
+        const activeInput = document.getElementById(activeInputId);
+        if(activeInput){ try{ activeInput.files = transfer.files; }catch(e){} }
+        const fileListInputs = document.querySelectorAll('input[type="file"][name="image_files"]');
+        fileListInputs.forEach(inp => {
+            if(inp !== activeInput){ try{ inp.files = new DataTransfer().files; }catch(e){} }
         });
     }
 }
@@ -3463,13 +3618,13 @@ function renderUploadSelection(textId, activeInputId){
     if(!textEl){ return; }
     const state = uploadSelectionState[textId] || { files: [] };
     if(state.files.length <= 0){
-        textEl.textContent = '未选择图片';
+        textEl.textContent = '选择图片';
         syncUploadInputs(textId, activeInputId);
         return;
     }
     textEl.innerHTML = '';
     const summary = document.createElement('div');
-    summary.textContent = `已选择 ${state.files.length} 张（本次最多5张）`;
+    summary.textContent = `已选 ${state.files.length} 张（最多5张）`;
     textEl.appendChild(summary);
     const list = document.createElement('div');
     list.className = 'upload-preview-list';
@@ -3548,15 +3703,9 @@ function confirmLocationSave(){ return confirm('确认保存货架位置和图�
                         <button type="button" class="{{ 'edit-field readonly' if readonly else '' }} {% if not can_manage %}btn-disabled{% endif %}" {% if readonly or not can_manage %}disabled{% endif %} onclick=\"openUploadChooser('asset-location-upload-choice-dialog', this)\">上传图片</button>
                     </div>
                     <div id="asset-location-image-files-text" class="file-list" data-inputs="asset-location-camera-files,asset-location-file-files">未选择图片</div>
-                    <div id="asset-location-upload-choice-dialog" class="upload-dialog" onclick="if(event.target === this){closeUploadChooser('asset-location-upload-choice-dialog');}">
-                        <div class="upload-dialog-card">
-                            <div class="upload-dialog-title">请选择上传方式</div>
-                            <div class="upload-dialog-actions">
-                                <label class="upload-choice-file upload-choice-camera">拍照<input class="{{ 'edit-field readonly' if readonly else '' }}" {% if readonly or not can_manage %}disabled{% endif %} type="file" id="asset-location-camera-files" name="image_files" accept="image/*" capture="environment" multiple onchange="updateSelectedFiles('asset-location-camera-files', 'asset-location-image-files-text', 'asset-location-upload-choice-dialog')"></label>
-                                <label class="upload-choice-file upload-choice-local">本地上传<input class="{{ 'edit-field readonly' if readonly else '' }}" {% if readonly or not can_manage %}disabled{% endif %} type="file" id="asset-location-file-files" name="image_files" accept="image/*" multiple onchange="updateSelectedFiles('asset-location-file-files', 'asset-location-image-files-text', 'asset-location-upload-choice-dialog')"></label>
-                                <button type="button" class="btn-cancel" onclick="closeUploadChooser('asset-location-upload-choice-dialog')">取消</button>
-                            </div>
-                        </div>
+                    <div style="display:none;">
+                        <input type="file" id="asset-location-camera-files" name="image_files" accept="image/*" capture="environment" multiple onchange="updateSelectedFiles('asset-location-camera-files', 'asset-location-image-files-text', 'asset-location-upload-choice-dialog')">
+                        <input type="file" id="asset-location-file-files" name="image_files" accept="image/*" multiple onchange="updateSelectedFiles('asset-location-file-files', 'asset-location-image-files-text', 'asset-location-upload-choice-dialog')">
                     </div>
                 </div>
             </div>
@@ -3569,7 +3718,7 @@ function confirmLocationSave(){ return confirm('确认保存货架位置和图�
                         <label style="display:flex;align-items:center;gap:6px;font-weight:normal;"><input class="edit-field readonly" disabled type="checkbox" name="delete_location_image_ids" value="{{ img.id }}"> 删除</label>
                     </div>
                     {% endfor %}
-                    <div style="color:#666;font-size:13px;">先点击“修改”，勾选要删除的图片，再点击“确认”。</div>
+                    <div style="color:#666;font-size:13px;">先点击"修改"，勾选要删除的图片，修改完再点"修改"按钮确认。</div>
                 {% else %}
                     <div>暂无图片</div>
                 {% endif %}
@@ -3638,6 +3787,18 @@ function confirmLocationSave(){ return confirm('确认保存货架位置和图�
         </div>
     </div>
 </div>
+
+<div id="asset-location-upload-choice-dialog" class="upload-dialog" onclick="if(event.target === this){closeUploadChooser('asset-location-upload-choice-dialog');}">
+    <div class="upload-dialog-card">
+        <div class="upload-dialog-title">请选择上传方式</div>
+        <div class="upload-dialog-actions">
+            <label class="upload-choice-file upload-choice-camera" onclick="document.getElementById('asset-location-camera-files').click();">拍照</label>
+            <label class="upload-choice-file upload-choice-local" onclick="document.getElementById('asset-location-file-files').click();">本地上传</label>
+            <button type="button" class="btn-cancel" onclick="closeUploadChooser('asset-location-upload-choice-dialog')">取消</button>
+        </div>
+    </div>
+</div>
+
 </body>
 </html>
 """
@@ -4797,7 +4958,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .upload-actions button{width:auto;min-width:120px;}
 .file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
 .upload-preview-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}.upload-preview-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #e1e7ef;border-radius:10px;background:#fbfdff;color:#4d5b6b;}.upload-preview-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.upload-remove-btn{width:28px;min-width:28px;height:28px;padding:0;border-radius:999px;background:#dc2626;color:#fff;border:none;box-shadow:none;font-weight:900;line-height:1;display:inline-flex;align-items:center;justify-content:center;}
-.upload-dialog{position:fixed;left:0;top:0;width:100vw;height:100dvh;background:transparent;display:none;z-index:9999;overflow:hidden;} .upload-dialog.show{display:block;} .upload-dialog-card{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);width:min(320px,calc(100vw - 24px));max-width:320px;background:#fff;border-radius:16px;padding:18px;box-shadow:0 20px 40px rgba(15,23,42,.22);z-index:10000;}
+.upload-dialog{position:fixed;inset:0;background:rgba(15,23,42,.52);display:none;align-items:center;justify-content:center;z-index:10000;padding:18px;} .upload-dialog.show{display:flex;} .upload-dialog-card{width:100%;max-width:320px;background:#fff;border-radius:18px;padding:22px 20px;box-shadow:0 18px 50px rgba(15,23,42,.28);}
 .upload-dialog-title{font-size:18px;font-weight:bold;margin-bottom:12px;text-align:center;color:#163047;}
 .upload-dialog-actions{display:flex;flex-direction:column;gap:10px;}
 .upload-dialog-actions button{width:100%;}
@@ -4829,7 +4990,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .simple-modal-actions button{width:auto;min-width:118px;padding:11px 18px;font-size:17px;font-weight:700;border-radius:12px;border:none;}
 .simple-modal-cancel{background:#6b7280;color:#fff;}
 .simple-modal-ok{background:#b91c1c;color:#fff;}
-@media (max-width:768px){.wrap{padding:14px 12px 20px;}.card{padding:16px;margin-bottom:14px;border-radius:14px;}.grid{grid-template-columns:1fr;}h2{font-size:22px;}.switch-row{gap:8px;}.switch-row a{flex:1 1 160px;}input,select,textarea,button{padding:10px;font-size:16px;border-radius:8px;}.upload-choice-file{padding:10px;font-size:16px;border-radius:8px;}.upload-dialog-card{border-radius:14px;padding:16px;width:min(320px,calc(100vw - 20px));top:58%;}.simple-modal{padding:16px;}.simple-modal-card{border-radius:16px;padding:18px 16px;}.simple-modal-title{font-size:20px;}.simple-modal-text{font-size:16px;}.simple-modal-input{padding:10px 12px;font-size:16px;border-radius:8px;}.simple-modal-actions button{min-width:108px;padding:10px 16px;font-size:16px;border-radius:10px;}}
+@media (max-width:768px){.wrap{padding:14px 12px 20px;}.card{padding:16px;margin-bottom:14px;border-radius:14px;}.grid{grid-template-columns:1fr;}h2{font-size:22px;}.switch-row{gap:8px;}.switch-row a{flex:1 1 160px;}input,select,textarea,button{padding:10px;font-size:16px;border-radius:8px;}.upload-choice-file{padding:10px;font-size:16px;border-radius:8px;}.upload-dialog-card{border-radius:14px;padding:16px;width:min(320px,calc(100vw - 20px));}.simple-modal{padding:16px;}.simple-modal-card{border-radius:16px;padding:18px 16px;}.simple-modal-title{font-size:20px;}.simple-modal-text{font-size:16px;}.simple-modal-input{padding:10px 12px;font-size:16px;border-radius:8px;}.simple-modal-actions button{min-width:108px;padding:10px 16px;font-size:16px;border-radius:10px;}}
 
 .asset-search-table th:nth-child(2),.asset-search-table td:nth-child(2),
 .asset-search-table th:nth-child(3),.asset-search-table td:nth-child(3),
@@ -4878,6 +5039,9 @@ function validateAccessoryGroupNoValue(value){
     return /^\\d{18}-\\d+$/.test(value) ? '' : '附属资产集团编号必须为18位主编号-序号';
 }
 
+    value = (value || '').trim();
+}
+
 function confirmDeviceSave(form){
     const deviceType = (form.querySelector('[name="device_type"]') || {}).value || '主设备';
     const statusEl = form.querySelector('[name="status"]');
@@ -4888,10 +5052,9 @@ function confirmDeviceSave(form){
         return confirm('确认保存吗？');
     }
     const groupNo = ((form.querySelector('[name="group_no"]') || {}).value || '').trim();
-    const message = deviceType === '配件' ? validateAccessoryGroupNoValue(groupNo) : validateAssetGroupNoValue(groupNo);
-    if(message){
-        alert(message);
-        return false;
+    if(groupNo){
+        const msg = deviceType === '配件' ? validateAccessoryGroupNoValue(groupNo) : validateAssetGroupNoValue(groupNo);
+        if(msg){ alert(msg); return false; }
     }
     return confirm('确认保存吗？');
 }
@@ -4929,10 +5092,11 @@ function syncUploadInputs(textId, activeInputId){
     if(typeof DataTransfer !== 'undefined'){
         const transfer = new DataTransfer();
         state.files.forEach(file => transfer.items.add(file));
-        inputIds.forEach((id, index) => {
-            const input = document.getElementById(id);
-            if(!input){ return; }
-            try{ input.files = (id === activeInputId || index === 0) ? transfer.files : new DataTransfer().files; }catch(e){}
+        const activeInput = document.getElementById(activeInputId);
+        if(activeInput){ try{ activeInput.files = transfer.files; }catch(e){} }
+        const fileListInputs = document.querySelectorAll('input[type="file"][name="image_files"]');
+        fileListInputs.forEach(inp => {
+            if(inp !== activeInput){ try{ inp.files = new DataTransfer().files; }catch(e){} }
         });
     }
 }
@@ -4941,13 +5105,13 @@ function renderUploadSelection(textId, activeInputId){
     if(!textEl){ return; }
     const state = uploadSelectionState[textId] || { files: [] };
     if(state.files.length <= 0){
-        textEl.textContent = '未选择图片';
+        textEl.textContent = '选择图片';
         syncUploadInputs(textId, activeInputId);
         return;
     }
     textEl.innerHTML = '';
     const summary = document.createElement('div');
-    summary.textContent = `已选择 ${state.files.length} 张（本次最多5张）`;
+    summary.textContent = `已选 ${state.files.length} 张（最多5张）`;
     textEl.appendChild(summary);
     const list = document.createElement('div');
     list.className = 'upload-preview-list';
@@ -5005,7 +5169,7 @@ function updateSelectedFiles(inputId, textId, dialogId){
         </div>
         <div style="color:#666;margin-bottom:10px;">内部编号和集团编号至少填写一个。选择"开箱"状态时，集团编号和内部编号均可空，内部编号留空将自动填入12位时间戳。</div>
         {% if error %}<div class="err">{{ error }}</div>{% endif %}
-        <form method="post" enctype="multipart/form-data">
+        <form method="post" enctype="multipart/form-data" onsubmit="return confirmDeviceSave(this);">
             <input type="hidden" name="parent_asset_id" value="{{ form_data.parent_asset_id }}">
             <div class="grid">
                 <div class="row">
@@ -5037,19 +5201,9 @@ function updateSelectedFiles(inputId, textId, dialogId){
                         <button type="button" class="btn-upload-primary" onclick=\"openUploadChooser('device-upload-choice-dialog', this)\">上传图片</button>
                     </div>
                     <div id="device-image-files-text" class="file-list" data-inputs="device-camera-files,device-file-files">未选择图片</div>
-                    <div id="device-upload-choice-dialog" class="upload-dialog" onclick="if(event.target === this){closeUploadChooser('device-upload-choice-dialog');}">
-                        <div class="upload-dialog-card">
-                            <div class="upload-dialog-title">请选择上传方式</div>
-                            <div class="upload-dialog-actions">
-                                <label class="upload-choice-file upload-choice-camera">拍照
-                                    <input type="file" id="device-camera-files" name="image_files" accept="image/*" capture="environment" multiple onchange="updateSelectedFiles('device-camera-files', 'device-image-files-text', 'device-upload-choice-dialog')">
-                                </label>
-                                <label class="upload-choice-file upload-choice-local">本地上传
-                                    <input type="file" id="device-file-files" name="image_files" accept="image/*" multiple onchange="updateSelectedFiles('device-file-files', 'device-image-files-text', 'device-upload-choice-dialog')">
-                                </label>
-                                <button type="button" class="btn-cancel" onclick="closeUploadChooser('device-upload-choice-dialog')">取消</button>
-                            </div>
-                        </div>
+                    <div style="display:none;">
+                        <input type="file" id="device-camera-files" name="image_files" accept="image/*" capture="environment" multiple onchange="updateSelectedFiles('device-camera-files', 'device-image-files-text', 'device-upload-choice-dialog')">
+                        <input type="file" id="device-file-files" name="image_files" accept="image/*" multiple onchange="updateSelectedFiles('device-file-files', 'device-image-files-text', 'device-upload-choice-dialog')">
                     </div>
                 </div>
             </div>
@@ -5058,9 +5212,18 @@ function updateSelectedFiles(inputId, textId, dialogId){
         </form>
     </div>
 </div>
+<div id="device-upload-choice-dialog" class="upload-dialog" onclick="if(event.target === this){closeUploadChooser('device-upload-choice-dialog');}">
+    <div class="upload-dialog-card">
+        <div class="upload-dialog-title">请选择上传方式</div>
+        <div class="upload-dialog-actions">
+            <label class="upload-choice-file upload-choice-camera" onclick="document.getElementById('device-camera-files').click();">拍照</label>
+            <label class="upload-choice-file upload-choice-local" onclick="document.getElementById('device-file-files').click();">本地上传</label>
+            <button type="button" class="btn-cancel" onclick="closeUploadChooser('device-upload-choice-dialog')">取消</button>
+        </div>
+    </div>
+</div>
 </body>
-</html>
-"""
+</html>"""
 
 ASSET_DETAIL_HTML = """
 <!doctype html>
@@ -5118,7 +5281,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .upload-actions button{width:auto;min-width:120px;}
 .file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
 .upload-preview-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}.upload-preview-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #e1e7ef;border-radius:10px;background:#fbfdff;color:#4d5b6b;}.upload-preview-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.upload-remove-btn{width:28px;min-width:28px;height:28px;padding:0;border-radius:999px;background:#dc2626;color:#fff;border:none;box-shadow:none;font-weight:900;line-height:1;display:inline-flex;align-items:center;justify-content:center;}
-.upload-dialog{position:fixed;left:0;top:0;width:100vw;height:100dvh;background:transparent;display:none;z-index:9999;overflow:hidden;} .upload-dialog.show{display:block;} .upload-dialog-card{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);width:min(320px,calc(100vw - 24px));max-width:320px;background:#fff;border-radius:16px;padding:18px;box-shadow:0 20px 40px rgba(15,23,42,.22);z-index:10000;}
+.upload-dialog{position:fixed;inset:0;background:rgba(15,23,42,.52);display:none;align-items:center;justify-content:center;z-index:10000;padding:18px;} .upload-dialog.show{display:flex;} .upload-dialog-card{width:100%;max-width:320px;background:#fff;border-radius:18px;padding:22px 20px;box-shadow:0 18px 50px rgba(15,23,42,.28);}
 .upload-dialog-title{font-size:18px;font-weight:bold;margin-bottom:12px;text-align:center;color:#163047;}
 .upload-dialog-actions{display:flex;flex-direction:column;gap:10px;}
 .upload-dialog-actions button{width:100%;}
@@ -5151,7 +5314,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .simple-modal-actions button{width:auto;min-width:118px;padding:11px 18px;font-size:17px;font-weight:700;border-radius:12px;border:none;}
 .simple-modal-cancel{background:#6b7280;color:#fff;}
 .simple-modal-ok{background:#b91c1c;color:#fff;}
-@media (max-width:768px){.wrap{padding:14px 12px 20px;}.card{padding:16px;margin-bottom:14px;border-radius:14px;}.grid{grid-template-columns:1fr;gap:10px;}.row{margin-bottom:6px;}label{margin-bottom:4px;font-size:16px;}.image-row{margin-bottom:10px;padding:10px 12px;}.title-row{align-items:flex-start;gap:10px;margin-bottom:12px;flex-direction:column;}.title-actions{width:100% !important;margin-left:0;display:flex !important;justify-content:space-between;gap:14px;flex-wrap:nowrap;}.title-actions > *{width:auto !important;max-width:none;flex:0 0 auto;}.title-actions a{width:auto !important;}.title-actions button{min-width:104px !important;width:auto !important;max-width:none;padding:10px 14px !important;font-size:16px;}.detail-actions{gap:14px;margin-top:12px;justify-content:space-between;flex-wrap:nowrap;}.detail-actions button{min-width:104px;width:auto;max-width:none;padding:10px 14px;font-size:16px;}.switch-row{gap:8px;}.switch-row a{flex:1 1 160px;}h2{font-size:22px;}.muted{font-size:14px;line-height:1.6;}.file-list{margin-top:8px;font-size:14px;line-height:1.6;}input,select,textarea,button{padding:10px 12px;font-size:16px;border-radius:8px;}.upload-choice-file{padding:10px;font-size:16px;border-radius:8px;}.upload-dialog-card{border-radius:14px;padding:16px;width:min(320px,calc(100vw - 20px));top:58%;}.simple-modal{padding:16px;}.simple-modal-card{border-radius:16px;padding:18px 16px;}.simple-modal-title{font-size:20px;}.simple-modal-text{font-size:16px;}.simple-modal-input{padding:10px 12px;font-size:16px;border-radius:8px;}.simple-modal-actions button{min-width:108px;padding:10px 16px;font-size:16px;border-radius:10px;}}
+@media (max-width:768px){.wrap{padding:14px 12px 20px;}.card{padding:16px;margin-bottom:14px;border-radius:14px;}.grid{grid-template-columns:1fr;gap:10px;}.row{margin-bottom:6px;}label{margin-bottom:4px;font-size:16px;}.image-row{margin-bottom:10px;padding:10px 12px;}.title-row{align-items:flex-start;gap:10px;margin-bottom:12px;flex-direction:column;}.title-actions{width:100% !important;margin-left:0;display:flex !important;justify-content:space-between;gap:14px;flex-wrap:nowrap;}.title-actions > *{width:auto !important;max-width:none;flex:0 0 auto;}.title-actions a{width:auto !important;}.title-actions button{min-width:104px !important;width:auto !important;max-width:none;padding:10px 14px !important;font-size:16px;}.detail-actions{gap:14px;margin-top:12px;justify-content:space-between;flex-wrap:nowrap;}.detail-actions button{min-width:104px;width:auto;max-width:none;padding:10px 14px;font-size:16px;}.switch-row{gap:8px;}.switch-row a{flex:1 1 160px;}h2{font-size:22px;}.muted{font-size:14px;line-height:1.6;}.file-list{margin-top:8px;font-size:14px;line-height:1.6;}input,select,textarea,button{padding:10px 12px;font-size:16px;border-radius:8px;}.upload-choice-file{padding:10px;font-size:16px;border-radius:8px;}.upload-dialog-card{border-radius:14px;padding:16px;width:min(320px,calc(100vw - 20px));}.simple-modal{padding:16px;}.simple-modal-card{border-radius:16px;padding:18px 16px;}.simple-modal-title{font-size:20px;}.simple-modal-text{font-size:16px;}.simple-modal-input{padding:10px 12px;font-size:16px;border-radius:8px;}.simple-modal-actions button{min-width:108px;padding:10px 16px;font-size:16px;border-radius:10px;}}
 
 .asset-search-table th:nth-child(2),.asset-search-table td:nth-child(2),
 .asset-search-table th:nth-child(3),.asset-search-table td:nth-child(3),
@@ -5188,14 +5351,25 @@ function confirmAssetSave(form){
     if(isStatusUnboxing(form)){
         const groupNo = ((form.querySelector('[name="group_no"]') || {}).value || '').trim();
         if(groupNo){ const msg = validateAssetGroupNoValue(groupNo); if(msg){ alert(msg); return false; } }
-        return confirm('确认保存吗？');
+        return true;
     }
     const groupNo = ((form.querySelector('[name="group_no"]') || {}).value || '').trim();
-    const message = validateAssetGroupNoValue(groupNo); if(message){ alert(message); return false; }
-    return confirm('确认保存吗？');
+    const msg = validateAssetGroupNoValue(groupNo);
+    if(msg){ alert(msg); return false; }
+    return true;
+}
+function confirmAssetSaveModal(formId){
+    const form = document.getElementById(formId);
+    if(!form){ return; }
+    if(!confirmAssetSave(form)){ return; }
+    openDeleteModal({
+        title:'确认保存',
+        text:'确认保存当前修改吗？',
+        onOk: function(){ form.submit(); return true; }
+    });
 }
 function beginEdit(formId, buttonId){ const form = document.getElementById(formId); if(!form){ return false; } const fields = form.querySelectorAll('.edit-field'); fields.forEach(el => { el.disabled = false; el.classList.remove('readonly'); }); const button = document.getElementById(buttonId); if(button){ button.textContent = '确认'; button.setAttribute('data-mode', 'save'); } return false; }
-function handleEditOrSave(formId, buttonId){ const button = document.getElementById(buttonId); if(!button){ return false; } const mode = button.getAttribute('data-mode') || 'edit'; if(mode === 'save'){ const form = document.getElementById(formId); if(form){ if(form.requestSubmit){ form.requestSubmit(); } else { form.submit(); } } return false; } return beginEdit(formId, buttonId); }
+function handleEditOrSave(formId, buttonId){ const button = document.getElementById(buttonId); if(!button){ return false; } const mode = button.getAttribute('data-mode') || 'edit'; if(mode === 'save'){ const form = document.getElementById(formId); if(form){ openDeleteModal({ title:'确认保存', text:'确认保存当前修改吗？', onOk: function(){ form.submit(); return true; } }); } return false; } beginEdit(formId, buttonId); }
 function openUploadChooser(dialogId, triggerEl){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.add('show'); } }
 function closeUploadChooser(dialogId){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.remove('show'); } }
 const uploadSelectionState = window.uploadSelectionState || (window.uploadSelectionState = {});
@@ -5229,10 +5403,11 @@ function syncUploadInputs(textId, activeInputId){
     if(typeof DataTransfer !== 'undefined'){
         const transfer = new DataTransfer();
         state.files.forEach(file => transfer.items.add(file));
-        inputIds.forEach((id, index) => {
-            const input = document.getElementById(id);
-            if(!input){ return; }
-            try{ input.files = (id === activeInputId || index === 0) ? transfer.files : new DataTransfer().files; }catch(e){}
+        const activeInput = document.getElementById(activeInputId);
+        if(activeInput){ try{ activeInput.files = transfer.files; }catch(e){} }
+        const fileListInputs = document.querySelectorAll('input[type="file"][name="image_files"]');
+        fileListInputs.forEach(inp => {
+            if(inp !== activeInput){ try{ inp.files = new DataTransfer().files; }catch(e){} }
         });
     }
 }
@@ -5241,13 +5416,13 @@ function renderUploadSelection(textId, activeInputId){
     if(!textEl){ return; }
     const state = uploadSelectionState[textId] || { files: [] };
     if(state.files.length <= 0){
-        textEl.textContent = '未选择图片';
+        textEl.textContent = '选择图片';
         syncUploadInputs(textId, activeInputId);
         return;
     }
     textEl.innerHTML = '';
     const summary = document.createElement('div');
-    summary.textContent = `已选择 ${state.files.length} 张（本次最多5张）`;
+    summary.textContent = `已选 ${state.files.length} 张（最多5张）`;
     textEl.appendChild(summary);
     const list = document.createElement('div');
     list.className = 'upload-preview-list';
@@ -5414,7 +5589,7 @@ function requestInventory(formId, message){
         </div>
         {% if message %}<div class="msg">{{ message }}</div>{% endif %}
         {% if error %}<div class="err">{{ error }}</div>{% endif %}
-        <form id="asset-form" method="post" enctype="multipart/form-data" onsubmit="return confirmAssetSave(this)">
+        <form id="asset-form" method="post" enctype="multipart/form-data">
             <input type="hidden" name="action" value="save_asset">
             <div class="grid">
                 <div class="row"><label>集团编号</label><input class="edit-field readonly" disabled type="text" name="group_no" value="{{ asset.group_no or '' }}"></div>
@@ -5429,12 +5604,9 @@ function requestInventory(formId, message){
                     <label>上传图片（最多5张）</label>
                     <div class="upload-actions"><button type="button" class="edit-field readonly" disabled onclick=\"openUploadChooser('asset-upload-choice-dialog', this)\">上传图片</button></div>
                     <div id="asset-image-files-text" class="file-list" data-inputs="asset-camera-files,asset-file-files">未选择图片</div>
-                    <div id="asset-upload-choice-dialog" class="upload-dialog" onclick="if(event.target === this){closeUploadChooser('asset-upload-choice-dialog');}">
-                        <div class="upload-dialog-card"><div class="upload-dialog-title">请选择上传方式</div><div class="upload-dialog-actions">
-                            <label class="upload-choice-file upload-choice-camera">拍照<input class="edit-field readonly" disabled type="file" id="asset-camera-files" name="image_files" accept="image/*" capture="environment" multiple onchange="updateSelectedFiles('asset-camera-files', 'asset-image-files-text', 'asset-upload-choice-dialog')"></label>
-                            <label class="upload-choice-file upload-choice-local">本地上传<input class="edit-field readonly" disabled type="file" id="asset-file-files" name="image_files" accept="image/*" multiple onchange="updateSelectedFiles('asset-file-files', 'asset-image-files-text', 'asset-upload-choice-dialog')"></label>
-                            <button type="button" class="btn-cancel" onclick="closeUploadChooser('asset-upload-choice-dialog')">取消</button>
-                        </div></div>
+                    <div style="display:none;">
+                        <input type="file" id="asset-camera-files" name="image_files" accept="image/*" capture="environment" multiple onchange="updateSelectedFiles('asset-camera-files', 'asset-image-files-text', 'asset-upload-choice-dialog')">
+                        <input type="file" id="asset-file-files" name="image_files" accept="image/*" multiple onchange="updateSelectedFiles('asset-file-files', 'asset-image-files-text', 'asset-upload-choice-dialog')">
                     </div>
                 </div>
             </div>
@@ -5444,7 +5616,7 @@ function requestInventory(formId, message){
                     {% for img in images %}
                     <div class="image-row"><a href="/uploads/{{ img.image_path }}" target="_blank">图片{{ loop.index }}</a><label style="display:flex;align-items:center;gap:6px;font-weight:normal;"><input class="edit-field readonly" disabled type="checkbox" name="delete_asset_image_ids" value="{{ img.id }}"> 删除</label></div>
                     {% endfor %}
-                    <div style="color:#666;font-size:13px;">先点击“修改”，勾选要删除的图片，再点击“确认”。</div>
+                    <div style="color:#666;font-size:13px;">先点击"修改"，勾选要删除的图片，修改完再点"修改"按钮确认。</div>
                 {% else %}<div>暂无图片</div>{% endif %}
             </div>
             <div class="row"><label>备注</label><textarea class="edit-field readonly" disabled name="remark">{{ asset.remark or '' }}</textarea></div>
@@ -5479,6 +5651,14 @@ function requestInventory(formId, message){
             </table>
         </div>
     </div>
+
+<div id="asset-upload-choice-dialog" class="upload-dialog" onclick="if(event.target === this){closeUploadChooser('asset-upload-choice-dialog');}">
+    <div class="upload-dialog-card"><div class="upload-dialog-title">请选择上传方式</div><div class="upload-dialog-actions">
+        <label class="upload-choice-file upload-choice-camera" onclick="document.getElementById('asset-camera-files').click();">拍照</label>
+        <label class="upload-choice-file upload-choice-local" onclick="document.getElementById('asset-file-files').click();">本地上传</label>
+        <button type="button" class="btn-cancel" onclick="closeUploadChooser('asset-upload-choice-dialog')">取消</button>
+    </div></div>
+</div>
 
 <div id="delete-modal" class="simple-modal" onclick="if(event.target===this){closeDeleteModal();}">
     <div class="simple-modal-card">
@@ -5548,7 +5728,7 @@ tbody tr:hover td{background:#eff3f7;}
 .upload-actions button{width:auto;min-width:120px;}
 .file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
 .upload-preview-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}.upload-preview-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #e1e7ef;border-radius:10px;background:#fbfdff;color:#4d5b6b;}.upload-preview-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.upload-remove-btn{width:28px;min-width:28px;height:28px;padding:0;border-radius:999px;background:#dc2626;color:#fff;border:none;box-shadow:none;font-weight:900;line-height:1;display:inline-flex;align-items:center;justify-content:center;}
-.upload-dialog{position:fixed;left:0;top:0;width:100vw;height:100dvh;background:transparent;display:none;z-index:9999;overflow:hidden;} .upload-dialog.show{display:block;} .upload-dialog-card{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);width:min(320px,calc(100vw - 24px));max-width:320px;background:#fff;border-radius:16px;padding:18px;box-shadow:0 20px 40px rgba(15,23,42,.22);z-index:10000;}
+.upload-dialog{position:fixed;inset:0;background:rgba(15,23,42,.52);display:none;align-items:center;justify-content:center;z-index:10000;padding:18px;} .upload-dialog.show{display:flex;} .upload-dialog-card{width:100%;max-width:320px;background:#fff;border-radius:18px;padding:22px 20px;box-shadow:0 18px 50px rgba(15,23,42,.28);}
 .upload-dialog-title{font-size:18px;font-weight:bold;margin-bottom:12px;text-align:center;color:#163047;}
 .upload-dialog-actions{display:flex;flex-direction:column;gap:10px;}
 .upload-dialog-actions button{width:100%;}
@@ -5581,7 +5761,7 @@ tbody tr:hover td{background:#eff3f7;}
 .simple-modal-actions button{width:auto;min-width:118px;padding:11px 18px;font-size:17px;font-weight:700;border-radius:12px;border:none;}
 .simple-modal-cancel{background:#6b7280;color:#fff;}
 .simple-modal-ok{background:#b91c1c;color:#fff;}
-@media (max-width:768px){.wrap{padding:14px 12px 20px;}.card{padding:16px;margin-bottom:14px;border-radius:14px;}.grid{grid-template-columns:1fr;}h2{font-size:22px;}.switch-row{gap:8px;}.switch-row a{flex:1 1 160px;}input,select,textarea,button{padding:10px;font-size:16px;border-radius:8px;}.upload-choice-file{padding:10px;font-size:16px;border-radius:8px;}.upload-dialog-card{border-radius:14px;padding:16px;width:min(320px,calc(100vw - 20px));top:58%;}.simple-modal{padding:16px;}.simple-modal-card{border-radius:16px;padding:18px 16px;}.simple-modal-title{font-size:20px;}.simple-modal-text{font-size:16px;}.simple-modal-input{padding:10px 12px;font-size:16px;border-radius:8px;}.simple-modal-actions button{min-width:108px;padding:10px 16px;font-size:16px;border-radius:10px;}}
+@media (max-width:768px){.wrap{padding:14px 12px 20px;}.card{padding:16px;margin-bottom:14px;border-radius:14px;}.grid{grid-template-columns:1fr;}h2{font-size:22px;}.switch-row{gap:8px;}.switch-row a{flex:1 1 160px;}input,select,textarea,button{padding:10px;font-size:16px;border-radius:8px;}.upload-choice-file{padding:10px;font-size:16px;border-radius:8px;}.upload-dialog-card{border-radius:14px;padding:16px;width:min(320px,calc(100vw - 20px));}.simple-modal{padding:16px;}.simple-modal-card{border-radius:16px;padding:18px 16px;}.simple-modal-title{font-size:20px;}.simple-modal-text{font-size:16px;}.simple-modal-input{padding:10px 12px;font-size:16px;border-radius:8px;}.simple-modal-actions button{min-width:108px;padding:10px 16px;font-size:16px;border-radius:10px;}}
 @media (max-width:768px){.title-row{align-items:flex-start;gap:10px;margin-bottom:12px;flex-direction:column;}.title-actions{width:100% !important;margin-left:0;display:flex !important;justify-content:space-between;gap:14px;flex-wrap:nowrap;}.title-actions > *{width:auto !important;max-width:none;flex:0 0 auto;}.title-actions a{width:auto !important;}.title-actions button{min-width:104px !important;width:auto !important;max-width:none;padding:10px 14px !important;font-size:16px;}}
 
 .asset-search-table th:nth-child(2),.asset-search-table td:nth-child(2),
@@ -5647,10 +5827,11 @@ function syncUploadInputs(textId, activeInputId){
     if(typeof DataTransfer !== 'undefined'){
         const transfer = new DataTransfer();
         state.files.forEach(file => transfer.items.add(file));
-        inputIds.forEach((id, index) => {
-            const input = document.getElementById(id);
-            if(!input){ return; }
-            try{ input.files = (id === activeInputId || index === 0) ? transfer.files : new DataTransfer().files; }catch(e){}
+        const activeInput = document.getElementById(activeInputId);
+        if(activeInput){ try{ activeInput.files = transfer.files; }catch(e){} }
+        const fileListInputs = document.querySelectorAll('input[type="file"][name="image_files"]');
+        fileListInputs.forEach(inp => {
+            if(inp !== activeInput){ try{ inp.files = new DataTransfer().files; }catch(e){} }
         });
     }
 }
@@ -5659,13 +5840,13 @@ function renderUploadSelection(textId, activeInputId){
     if(!textEl){ return; }
     const state = uploadSelectionState[textId] || { files: [] };
     if(state.files.length <= 0){
-        textEl.textContent = '未选择图片';
+        textEl.textContent = '选择图片';
         syncUploadInputs(textId, activeInputId);
         return;
     }
     textEl.innerHTML = '';
     const summary = document.createElement('div');
-    summary.textContent = `已选择 ${state.files.length} 张（本次最多5张）`;
+    summary.textContent = `已选 ${state.files.length} 张（最多5张）`;
     textEl.appendChild(summary);
     const list = document.createElement('div');
     list.className = 'upload-preview-list';
@@ -5712,9 +5893,18 @@ function updateSelectedFiles(inputId, textId, dialogId){
     }
 }
 
-function confirmAccessorySave(){ return confirm('确认保存吗？'); }
+function confirmAccessorySave(){ return true; }
+function confirmAccessorySaveModal(formId){
+    const form = document.getElementById(formId);
+    if(!form){ return; }
+    openDeleteModal({
+        title:'确认保存',
+        text:'确认保存当前修改吗？',
+        onOk: function(){ form.submit(); return true; }
+    });
+}
 function beginEdit(formId, buttonId){ const form = document.getElementById(formId); if(!form){ return false; } const fields = form.querySelectorAll('.edit-field'); fields.forEach(el => { el.disabled = false; el.classList.remove('readonly'); }); const button = document.getElementById(buttonId); if(button){ button.textContent = '确认'; button.setAttribute('data-mode', 'save'); } return false; }
-function handleEditOrSave(formId, buttonId){ const button = document.getElementById(buttonId); if(!button){ return false; } const mode = button.getAttribute('data-mode') || 'edit'; if(mode === 'save'){ const form = document.getElementById(formId); if(form){ if(form.requestSubmit){ form.requestSubmit(); } else { form.submit(); } } return false; } return beginEdit(formId, buttonId); }
+function handleEditOrSave(formId, buttonId){ const button = document.getElementById(buttonId); if(!button){ return false; } const mode = button.getAttribute('data-mode') || 'edit'; if(mode === 'save'){ const form = document.getElementById(formId); if(form){ openDeleteModal({ title:'确认保存', text:'确认保存当前修改吗？', onOk: function(){ form.submit(); return true; } }); } return false; } beginEdit(formId, buttonId); }
 
 const deleteModalState = { onOk: null, onCancel: null };
 function closeDeleteModal(){
@@ -5835,7 +6025,7 @@ function requestInventory(formId, message){
         </div>
         {% if message %}<div class="msg">{{ message }}</div>{% endif %}
         {% if error %}<div class="err">{{ error }}</div>{% endif %}
-        <form id="accessory-form" method="post" enctype="multipart/form-data" onsubmit="return confirmAccessorySave()">
+        <form id="accessory-form" method="post" enctype="multipart/form-data">
             <div class="grid">
                 <div class="row"><label>附属资产集团编号</label><input class="edit-field readonly" disabled type="text" name="sub_group_no" value="{{ accessory.sub_group_no or '' }}"></div>
                 <div class="row"><label>附属资产内部编号</label><input class="edit-field readonly" disabled type="text" name="sub_internal_no" value="{{ accessory.sub_internal_no or '' }}"></div>
@@ -5849,10 +6039,13 @@ function requestInventory(formId, message){
                     <label>上传图片（最多5张）</label>
                     <div class="upload-actions"><button type="button" class="edit-field readonly" disabled onclick=\"openUploadChooser('accessory-upload-choice-dialog', this)\">上传图片</button></div>
                     <div id="accessory-image-files-text" class="file-list" data-inputs="accessory-camera-files,accessory-file-files">未选择图片</div>
-                    <div id="accessory-upload-choice-dialog" class="upload-dialog" onclick="if(event.target === this){closeUploadChooser('accessory-upload-choice-dialog');}"><div class="upload-dialog-card"><div class="upload-dialog-title">请选择上传方式</div><div class="upload-dialog-actions"><label class="upload-choice-file upload-choice-camera">拍照<input class="edit-field readonly" disabled type="file" id="accessory-camera-files" name="image_files" accept="image/*" capture="environment" multiple onchange="updateSelectedFiles('accessory-camera-files', 'accessory-image-files-text', 'accessory-upload-choice-dialog')"></label><label class="upload-choice-file upload-choice-local">本地上传<input class="edit-field readonly" disabled type="file" id="accessory-file-files" name="image_files" accept="image/*" multiple onchange="updateSelectedFiles('accessory-file-files', 'accessory-image-files-text', 'accessory-upload-choice-dialog')"></label><button type="button" class="btn-cancel" onclick="closeUploadChooser('accessory-upload-choice-dialog')">取消</button></div></div></div>
+                    <div style="display:none;">
+                        <input type="file" id="accessory-camera-files" name="image_files" accept="image/*" capture="environment" multiple onchange="updateSelectedFiles('accessory-camera-files', 'accessory-image-files-text', 'accessory-upload-choice-dialog')">
+                        <input type="file" id="accessory-file-files" name="image_files" accept="image/*" multiple onchange="updateSelectedFiles('accessory-file-files', 'accessory-image-files-text', 'accessory-upload-choice-dialog')">
+                    </div>
                 </div>
             </div>
-            <div class="row"><label>当前图片</label>{% if images %}{% for img in images %}<div class="image-row"><a href="/uploads/{{ img.image_path }}" target="_blank">图片{{ loop.index }}</a><label style="display:flex;align-items:center;gap:6px;font-weight:normal;"><input class="edit-field readonly" disabled type="checkbox" name="delete_accessory_image_ids" value="{{ img.id }}"> 删除</label></div>{% endfor %}<div style="color:#666;font-size:13px;">先点击“修改”，勾选要删除的图片，再点击“确认”。</div>{% else %}<div>暂无图片</div>{% endif %}</div>
+            <div class="row"><label>当前图片</label>{% if images %}{% for img in images %}<div class="image-row"><a href="/uploads/{{ img.image_path }}" target="_blank">图片{{ loop.index }}</a><label style="display:flex;align-items:center;gap:6px;font-weight:normal;"><input class="edit-field readonly" disabled type="checkbox" name="delete_accessory_image_ids" value="{{ img.id }}"> 删除</label></div>{% endfor %}<div style="color:#666;font-size:13px;">先点击"修改"，勾选要删除的图片，修改完再点"修改"按钮确认。</div>{% else %}<div>暂无图片</div>{% endif %}</div>
             <div class="row"><label>备注</label><textarea class="edit-field readonly" disabled name="remark">{{ accessory.remark or '' }}</textarea></div>
             <div class="detail-actions">
                 {% if can_manage %}
@@ -5867,6 +6060,8 @@ function requestInventory(formId, message){
         <form id="accessory-delete-form" method="post" action="/accessory/{{ accessory.id }}/delete" style="display:none;"><input type="hidden" name="delete_pin" value=""></form>
         <form id="accessory-inventory-form" method="post" action="/accessory/{{ accessory.id }}" style="display:none;"><input type="hidden" name="action" value="inventory_accessory"></form>
     </div>
+
+<div id="accessory-upload-choice-dialog" class="upload-dialog" onclick="if(event.target === this){closeUploadChooser('accessory-upload-choice-dialog');}"><div class="upload-dialog-card"><div class="upload-dialog-title">请选择上传方式</div><div class="upload-dialog-actions"><label class="upload-choice-file upload-choice-camera" onclick="document.getElementById('accessory-camera-files').click();">拍照</label><label class="upload-choice-file upload-choice-local" onclick="document.getElementById('accessory-file-files').click();">本地上传</label><button type="button" class="btn-cancel" onclick="closeUploadChooser('accessory-upload-choice-dialog')">取消</button></div></div></div>
 
 <div id="delete-modal" class="simple-modal" onclick="if(event.target===this){closeDeleteModal();}">
     <div class="simple-modal-card">

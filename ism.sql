@@ -399,7 +399,7 @@ DROP TABLE IF EXISTS `users`;
 CREATE TABLE `users` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `username` varchar(100) NOT NULL,
-  `password_hash` varchar(255) NOT NULL,
+  `password` varchar(255) NOT NULL,
   `created_at` datetime DEFAULT current_timestamp(),
   PRIMARY KEY (`id`),
   UNIQUE KEY `username` (`username`)
@@ -413,7 +413,7 @@ CREATE TABLE `users` (
 LOCK TABLES `users` WRITE;
 /*!40000 ALTER TABLE `users` DISABLE KEYS */;
 INSERT INTO `users` VALUES
-(1,'admin','scrypt:32768:8:1$UkFXfKUf1bN7W6AH$1171dad9c03182ef6ca00e4e58084d50c1ce5b0cf8462ccaca80c1ed34bbc251dd8c6343feb3cdbb7f02f721fc61cdcffca4444a2d6b9760a46a8ad7eeabaff9','2026-03-30 19:45:27');
+(1,'admin','Plex0819$','2026-03-30 19:45:27');
 /*!40000 ALTER TABLE `users` ENABLE KEYS */;
 UNLOCK TABLES;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;

@@ -246,7 +246,7 @@ install_dependencies() {
 
 patch_config_upload_folder() {
     local mount_path="$1"
-    local config_file="${APP_ROOT}/config.py"
+    local config_file="${APP_ROOT}/config.yaml"
     if [ ! -f "$config_file" ]; then
         err "未找到 ${config_file}"
         return 1
@@ -258,10 +258,10 @@ import sys, re
 config_file = Path(sys.argv[1])
 mount_path = sys.argv[2]
 text = config_file.read_text(encoding="utf-8")
-new_line = f'    UPLOAD_FOLDER = "{mount_path}"'
-text2, n = re.subn(r'^\s*UPLOAD_FOLDER\s*=.*$', new_line, text, count=1, flags=re.MULTILINE)
+new_line = f'upload_folder: {mount_path}'
+text2, n = re.subn(r'^upload_folder:.*$', new_line, text, count=1, flags=re.MULTILINE)
 if n != 1:
-    raise SystemExit("未找到 UPLOAD_FOLDER 配置项")
+    raise SystemExit("未找到 upload_folder 配置项")
 config_file.write_text(text2, encoding="utf-8")
 print("patched", config_file)
 PY
@@ -361,10 +361,11 @@ download_files() {
 
     mkdir -p "$TMP_DIR/app_extract"
     cp -a "${EXTRACTED_DIR}app/." "$TMP_DIR/app_extract/"
-    cp -f "${EXTRACTED_DIR}config.py" "$TMP_DIR/config.py"
+    cp -f "${EXTRACTED_DIR}config.yaml" "$TMP_DIR/config.yaml"
     cp -f "${EXTRACTED_DIR}run.py" "$TMP_DIR/run.py"
     cp -f "${EXTRACTED_DIR}requirements.txt" "$TMP_DIR/requirements.txt"
     cp -f "${EXTRACTED_DIR}ism.sql" "$TMP_DIR/ism.sql"
+    cp -f "${EXTRACTED_DIR}ism_backup.sh" "$TMP_DIR/ism_backup.sh"
 
     ok "项目文件下载完成（直接从 GitHub 仓库同步）"
 }
@@ -381,10 +382,12 @@ deploy_files() {
     mkdir -p "$APP_ROOT" "$APP_DIR" "$ASSET_IMG_DIR" "$ACCESSORY_IMG_DIR" "$BACKUP_DIR"
     cp -a "$TMP_DIR/app_extract/." "$APP_DIR/"
 
-    cp -f "$TMP_DIR/config.py" "$APP_ROOT/config.py"
+    cp -f "$TMP_DIR/config.yaml" "$APP_ROOT/config.yaml"
     cp -f "$TMP_DIR/run.py" "$APP_ROOT/run.py"
     cp -f "$TMP_DIR/requirements.txt" "$APP_ROOT/requirements.txt"
     cp -f "$TMP_DIR/ism.sql" "$APP_ROOT/ism.sql"
+    cp -f "$TMP_DIR/ism_backup.sh" "$APP_ROOT/ism_backup.sh"
+    chmod +x "$APP_ROOT/ism_backup.sh"
 
     mkdir -p "$ASSET_IMG_DIR" "$ACCESSORY_IMG_DIR"
     ok "应用文件已部署"
@@ -403,7 +406,7 @@ setup_python_env() {
     . "$VENV_DIR/bin/activate"
     pip install --upgrade pip wheel setuptools
     pip install -r "$APP_ROOT/requirements.txt"
-    pip install pymysql gunicorn Pillow pytesseract
+    pip install pymysql gunicorn Pillow pytesseract pyyaml
     ok "Python 环境准备完成"
 }
 
@@ -419,6 +422,16 @@ EOF_DB
     info "导入数据库备份"
     mysql "$DB_NAME" < "$APP_ROOT/ism.sql"
     ok "数据库已导入"
+}
+
+setup_admin_user() {
+    local admin_user="$1"
+    local admin_pass="$2"
+    info "写入管理员账号到数据库"
+    mysql "$DB_NAME" <<EOF_ADMIN
+INSERT INTO users (username, password) VALUES ('${admin_user}', '${admin_pass}');
+EOF_ADMIN
+    ok "管理员账号已创建：${admin_user}"
 }
 
 write_nginx_http() {
@@ -620,11 +633,11 @@ apply_webdav_settings() {
     mkdir -p "$DAV_UPLOAD_ROOT/assets" "$DAV_UPLOAD_ROOT/accessories" "$DAV_UPLOAD_ROOT/sql_backups"
     touch "$DAV_UPLOAD_ROOT/test_write.txt"
 
-    if [ -f "${APP_ROOT}/config.py" ]; then
-        cp -f "${APP_ROOT}/config.py" "${APP_ROOT}/config.py.bak_webdav_$(date +%Y%m%d_%H%M%S)"
-        patch_config_upload_folder "$DAV_UPLOAD_ROOT"
+    if [ -f "${APP_ROOT}/config.yaml" ]; then
+        cp -f "${APP_ROOT}/config.yaml" "${APP_ROOT}/config.yaml.bak_webdav_$(date +%Y%m%d_%H%M%S)"
+        patch_config_upload_folder "$DAV_MOUNT"
     else
-        warn "未发现 ${APP_ROOT}/config.py，跳过程序配置修改"
+        warn "未发现 ${APP_ROOT}/config.yaml，跳过程序配置修改"
     fi
 
     patch_systemd_workers_and_dependencies "${WEBDAV_SERVICE_NAME}.service"
@@ -821,8 +834,8 @@ switch_to_local_storage() {
     stop_webdav_mount_service
 
     mkdir -p "$LOCAL_UPLOAD_ROOT/assets" "$LOCAL_UPLOAD_ROOT/accessories" "$LOCAL_UPLOAD_ROOT/sql_backups"
-    if [ -f "${APP_ROOT}/config.py" ]; then
-        cp -f "${APP_ROOT}/config.py" "${APP_ROOT}/config.py.bak_local_$(date +%Y%m%d_%H%M%S)"
+    if [ -f "${APP_ROOT}/config.yaml" ]; then
+        cp -f "${APP_ROOT}/config.yaml" "${APP_ROOT}/config.yaml.bak_local_$(date +%Y%m%d_%H%M%S)"
         patch_config_upload_folder "$LOCAL_UPLOAD_ROOT"
     fi
 
@@ -849,12 +862,9 @@ switch_to_clouddrive_storage() {
     fi
 
     echo "菜单 6 -> CloudDrive：设置系统写入路径"
-    echo "1) CloudDrive 实际挂载根目录：${CD_MOUNT_DIR}"
-    echo "2) 推荐填写现有目录：${CD_MOUNT_DIR}/ism_images"
-    echo "3) /ism_images 目录请提前在云盘内创建好，脚本也会尝试创建"
+    echo "CloudDrive 实际挂载根目录：${CD_MOUNT_DIR}"
     echo
-
-    read -r -p "请输入 CloudDrive 现有本地目录 [${CLOUDDRIVE_SOURCE:-${CD_MOUNT_DIR}/ism_images}]: " input_clouddrive_path
+    read -r -p "请输入 CloudDrive 现有本地目录（回车默认 ${CD_MOUNT_DIR}/ism_images）: " input_clouddrive_path
     normalize_clouddrive_source "${input_clouddrive_path:-${CLOUDDRIVE_SOURCE:-${CD_MOUNT_DIR}/ism_images}}"
 
     if [ "${CLOUDDRIVE_SOURCE}" = "${DAV_UPLOAD_ROOT}" ]; then
@@ -876,20 +886,11 @@ switch_to_clouddrive_storage() {
         return 1
     fi
 
-    mkdir -p "$DAV_UPLOAD_ROOT"
-    write_asset_clouddrive_wait_script
-    write_asset_clouddrive_bind_service
-    write_asset_clouddrive_rebind_service
-    systemctl daemon-reload
-    systemctl enable --now "${ASSET_CLOUDDRIVE_BIND_SERVICE_NAME}.service"
-    systemctl enable "${ASSET_CLOUDDRIVE_REBIND_SERVICE_NAME}.service" >/dev/null 2>&1 || true
-    systemctl start "${ASSET_CLOUDDRIVE_REBIND_SERVICE_NAME}.service" >/dev/null 2>&1 || true
-
-    if [ -f "${APP_ROOT}/config.py" ]; then
-        cp -f "${APP_ROOT}/config.py" "${APP_ROOT}/config.py.bak_clouddrive_$(date +%Y%m%d_%H%M%S)"
-        patch_config_upload_folder "$DAV_UPLOAD_ROOT"
+    if [ -f "${APP_ROOT}/config.yaml" ]; then
+        cp -f "${APP_ROOT}/config.yaml" "${APP_ROOT}/config.yaml.bak_clouddrive_$(date +%Y%m%d_%H%M%S)"
+        patch_config_upload_folder "$CLOUDDRIVE_SOURCE"
     else
-        warn "未发现 ${APP_ROOT}/config.py，跳过程序配置修改"
+        warn "未发现 ${APP_ROOT}/config.yaml，跳过程序配置修改"
     fi
 
     reset_asset_systemd_to_plain
@@ -901,7 +902,7 @@ switch_to_clouddrive_storage() {
         systemctl restart "$SERVICE_NAME"
     fi
 
-    if mountpoint -q "$DAV_UPLOAD_ROOT"; then
+    if [ -d "${CLOUDDRIVE_SOURCE}" ]; then
         ok "系统写入路径已切换到 CloudDrive：${CLOUDDRIVE_SOURCE}"
     else
         warn "暂未检测到 ${DAV_UPLOAD_ROOT} 为挂载点，请检查：systemctl status ${ASSET_CLOUDDRIVE_BIND_SERVICE_NAME} --no-pager"
@@ -1285,103 +1286,12 @@ uninstall_clouddrive_app() {
 }
 
 write_backup_script() {
-    mkdir -p "$APP_ROOT"
-    cat > "$BACKUP_SCRIPT" <<EOF_BACKUP
-#!/usr/bin/env bash
-set -euo pipefail
-
-PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-
-BACKUP_DIR="${BACKUP_DIR}"
-BACKUP_FILE="${BACKUP_FILE}"
-DB_NAME="${DB_NAME}"
-DB_USER="${DB_USER}"
-DB_PASS="${DB_PASS}"
-DAV_MOUNT="${DAV_MOUNT}"
-DAV_UPLOAD_ROOT="${DAV_UPLOAD_ROOT}"
-DAV_BACKUP_ROOT="\${DAV_UPLOAD_ROOT}/sql_backups"
-REMOTE_BACKUP_FILE="\${DAV_BACKUP_ROOT}/ism_latest.sql"
-BACKUP_DATE="\$(date +%Y.%m.%d)"
-REMOTE_CLOUDDRIVE_BACKUP_FILE="\${DAV_BACKUP_ROOT}/asset_manager_latest.\${BACKUP_DATE}.sql"
-BACKUP_LOG_FILE="${BACKUP_LOG_FILE}"
-STORAGE_BACKEND="${STORAGE_BACKEND}"
-WEBDAV_SERVICE_NAME="${WEBDAV_SERVICE_NAME}"
-ASSET_CLOUDDRIVE_BIND_SERVICE_NAME="${ASSET_CLOUDDRIVE_BIND_SERVICE_NAME}"
-
-mkdir -p "\$BACKUP_DIR"
-mkdir -p "\$(dirname "\$BACKUP_LOG_FILE")"
-touch "\$BACKUP_LOG_FILE"
-exec >> "\$BACKUP_LOG_FILE" 2>&1
-
-echo "=================================================================="
-echo "[INFO] \$(date '+%F %T') 开始执行数据库备份，存储模式：\$STORAGE_BACKEND"
-
-on_error() {
-    local exit_code="\$1"
-    local line_no="\$2"
-    echo "[ERR] \$(date '+%F %T') 备份失败，退出码=\${exit_code}，行号=\${line_no}"
-    exit "\$exit_code"
-}
-trap 'on_error "$?" "$LINENO"' ERR
-
-if ! command -v mysqldump >/dev/null 2>&1; then
-    echo "[ERR] 未找到 mysqldump，请先安装 MariaDB/MySQL 客户端"
-    exit 1
-fi
-
-TMP_BACKUP_FILE="\${BACKUP_FILE}.tmp"
-rm -f "\$TMP_BACKUP_FILE"
-
-mysqldump -u"\$DB_USER" -p"\$DB_PASS" "\$DB_NAME" > "\$TMP_BACKUP_FILE"
-if [ ! -s "\$TMP_BACKUP_FILE" ]; then
-    echo "[ERR] mysqldump 已执行，但未生成有效备份文件：\$TMP_BACKUP_FILE"
-    exit 1
-fi
-
-mv -f "\$TMP_BACKUP_FILE" "\$BACKUP_FILE"
-echo "[OK] 本地数据库备份完成：\$BACKUP_FILE"
-
-if [ "\$STORAGE_BACKEND" = "webdav" ]; then
-    if [ -f "/etc/systemd/system/\${WEBDAV_SERVICE_NAME}.service" ] || [ -f "/lib/systemd/system/\${WEBDAV_SERVICE_NAME}.service" ] || systemctl cat "\${WEBDAV_SERVICE_NAME}.service" >/dev/null 2>&1; then
-        if ! mountpoint -q "\$DAV_MOUNT"; then
-            echo "[INFO] WebDAV 当前未挂载，尝试重启服务：\$WEBDAV_SERVICE_NAME.service"
-            systemctl restart "\$WEBDAV_SERVICE_NAME.service" >/dev/null 2>&1 || true
-            sleep 3
-        fi
-    fi
-
-    if mountpoint -q "\$DAV_MOUNT"; then
-        mkdir -p "\$DAV_BACKUP_ROOT"
-        find "\$DAV_BACKUP_ROOT" -maxdepth 1 -type f -name '*.sql' -delete || true
-        cp -f "\$BACKUP_FILE" "\$REMOTE_BACKUP_FILE"
-        echo "[OK] WebDAV 备份已同步到 \$REMOTE_BACKUP_FILE"
+    if [ -f "$BACKUP_SCRIPT" ]; then
+        chmod +x "$BACKUP_SCRIPT"
+        ok "备份脚本已就绪：$BACKUP_SCRIPT"
     else
-        echo "[WARN] WebDAV 未挂载，仅保留本地备份：\$BACKUP_FILE"
+        warn "未找到备份脚本：$BACKUP_SCRIPT，请重新安装系统"
     fi
-elif [ "\$STORAGE_BACKEND" = "clouddrive" ]; then
-    if [ -f "/etc/systemd/system/\${ASSET_CLOUDDRIVE_BIND_SERVICE_NAME}.service" ] || [ -f "/lib/systemd/system/\${ASSET_CLOUDDRIVE_BIND_SERVICE_NAME}.service" ] || systemctl cat "\${ASSET_CLOUDDRIVE_BIND_SERVICE_NAME}.service" >/dev/null 2>&1; then
-        if ! mountpoint -q "\$DAV_UPLOAD_ROOT"; then
-            echo "[INFO] CloudDrive 当前未接入，尝试重启服务：\$ASSET_CLOUDDRIVE_BIND_SERVICE_NAME.service"
-            systemctl restart "\$ASSET_CLOUDDRIVE_BIND_SERVICE_NAME.service" >/dev/null 2>&1 || true
-            sleep 3
-        fi
-    fi
-
-    if mountpoint -q "\$DAV_UPLOAD_ROOT"; then
-        mkdir -p "\$DAV_BACKUP_ROOT"
-        cp -f "\$BACKUP_FILE" "\$REMOTE_CLOUDDRIVE_BACKUP_FILE"
-        echo "[OK] CloudDrive 备份已同步到 \$REMOTE_CLOUDDRIVE_BACKUP_FILE"
-    else
-        echo "[WARN] CloudDrive 未接入，仅保留本地备份：\$BACKUP_FILE"
-    fi
-else
-    echo "[OK] 当前为本地存储模式，仅保留本地备份：\$BACKUP_FILE"
-fi
-
-echo "[OK] \$(date '+%F %T') 数据库备份流程结束"
-EOF_BACKUP
-    chmod +x "$BACKUP_SCRIPT"
-    ok "数据库备份脚本已生成：$BACKUP_SCRIPT"
 }
 
 install_backup_cron() {
@@ -1403,39 +1313,34 @@ EOF_CRON
 }
 
 show_backup_cron_status() {
-    info "查看 cron 备份任务配置"
+    local GREEN='\033[92m' RED='\033[91m' NC='\033[0m'
+    local ok="${GREEN}✓${NC}" err="${RED}✗${NC}"
+
     if [ -f "$CRON_BACKUP_FILE" ]; then
-        cat "$CRON_BACKUP_FILE"
+        echo -e "${ok} 备份 cron 任务：$(grep -E '^[0-9*]' "$CRON_BACKUP_FILE" | head -1)"
     else
-        warn "当前未发现 cron 备份任务：$CRON_BACKUP_FILE"
+        echo -e "${err} 未发现 cron 备份任务：$CRON_BACKUP_FILE"
     fi
 
-    echo
-    info "查看备份脚本"
     if [ -f "$BACKUP_SCRIPT" ]; then
-        ls -lah "$BACKUP_SCRIPT"
+        echo -e "${ok} 备份脚本：$(ls -lh "$BACKUP_SCRIPT" | awk '{print $5, $NF}')"
     else
-        warn "当前未发现备份脚本：$BACKUP_SCRIPT"
+        echo -e "${err} 未发现备份脚本：$BACKUP_SCRIPT"
     fi
 
-    echo
-    info "查看 cron 服务状态"
-    systemctl status cron --no-pager || true
-
-    echo
-    info "查看今天 cron 是否调起过备份脚本"
     if journalctl -u cron --since "today" --no-pager 2>/dev/null | grep -F "$BACKUP_SCRIPT" >/dev/null 2>&1; then
-        journalctl -u cron --since "today" --no-pager 2>/dev/null | grep -F "$BACKUP_SCRIPT" || true
+        local run_count
+        run_count=$(journalctl -u cron --since "today" --no-pager 2>/dev/null | grep -cF "$BACKUP_SCRIPT" || true)
+        echo -e "${ok} 今日已执行 ${run_count} 次"
     else
-        warn "今天的 cron 日志中尚未发现备份脚本执行记录：$BACKUP_SCRIPT"
+        echo -e "${err} 今日尚未执行"
     fi
 
-    echo
-    info "查看最近备份日志"
-    if [ -f "$BACKUP_LOG_FILE" ]; then
-        tail -n 50 "$BACKUP_LOG_FILE"
+    if [ -f "$BACKUP_LOG_FILE" ] && [ -s "$BACKUP_LOG_FILE" ]; then
+        echo -e "${ok} 最近备份日志（末5行）："
+        tail -n 5 "$BACKUP_LOG_FILE"
     else
-        warn "当前还没有备份日志：$BACKUP_LOG_FILE"
+        echo -e "${err} 暂无备份日志"
     fi
 }
 
@@ -1636,12 +1541,15 @@ EOF_DB_UNINSTALL
 }
 
 install_asset_system() {
+    local ADMIN_USER="$1"
+    local ADMIN_PASS="$2"
     prepare_dirs
     download_files
     deploy_files
     sync_custom_files
     setup_python_env
     setup_database
+    setup_admin_user "$ADMIN_USER" "$ADMIN_PASS"
     write_systemd
     configure_nginx
     write_backup_script
@@ -1658,11 +1566,23 @@ install_asset_system() {
 confirm_install_asset_system() {
     echo "你选择了【2 安装系统】。"
     echo "该操作会部署程序、初始化数据库、配置 systemd 和 Nginx。"
+    echo "请设置管理员账号和密码（明文保存到 /root/ism/config.yaml）："
+    local ADMIN_USER=""
+    local ADMIN_PASS=""
+    while [ -z "$ADMIN_USER" ]; do
+        read -r -p "管理员用户名: " ADMIN_USER
+    done
+    while [ -z "$ADMIN_PASS" ]; do
+        read -r -s -p "管理员密码: " ADMIN_PASS
+        echo
+    done
+    echo
+
     read -r -p "确认安装吗？输入 y/Y 继续，n/N 取消并返回主菜单: " confirm_install
 
     case "${confirm_install:-n}" in
         y|Y)
-            install_asset_system
+            install_asset_system "$ADMIN_USER" "$ADMIN_PASS"
             ;;
         *)
             warn "已取消安装，返回主菜单"

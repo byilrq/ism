@@ -11,8 +11,7 @@ from flask_login import current_user
 from openpyxl import Workbook, load_workbook
 from sqlalchemy import or_, func
 
-from app import db
-from config import Config
+from app import db, FlaskConfig as Config
 
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}

@@ -212,6 +212,67 @@
       font-size: 17px;
     }
 
+    .input input:-webkit-autofill,
+    .input input:-webkit-autofill:hover,
+    .input input:-webkit-autofill:focus,
+    .input input:-webkit-autofill:active {
+      -webkit-background-clip: text !important;
+      -webkit-text-fill-color: var(--text) !important;
+      transition: background-color 9999s ease-in-out 0s !important;
+      box-shadow: 0 0 0 1000px transparent inset !important;
+    }
+
+    .pwd-wrapper {
+      display: flex;
+      align-items: center;
+      flex: 1;
+      height: 100%;
+    }
+
+    .pwd-wrapper input {
+      height: 52px;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+      font-size: 17px;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .pwd-toggle {
+      width: 44px;
+      height: 44px;
+      min-width: 44px;
+      min-height: 44px;
+      margin: 0;
+      padding: 0;
+      border: none;
+      border-radius: 12px;
+      background: transparent;
+      box-shadow: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      color: var(--aqua-2);
+      opacity: 0.6;
+      transition: opacity 0.2s ease;
+    }
+
+    .pwd-toggle:hover {
+      opacity: 1;
+      filter: none;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .pwd-toggle svg {
+      width: 22px;
+      height: 22px;
+    }
+
     .input input::placeholder {
       color: var(--placeholder);
     }
@@ -271,6 +332,7 @@
       {% endwith %}
 
       <form method="post" class="login-form" autocomplete="on">
+        <input type="hidden" name="login_submit" value="1">
         <div class="field">
           <label for="username">用户名</label>
           <div class="input">
@@ -285,15 +347,37 @@
         <div class="field">
           <label for="password">密码</label>
           <div class="input">
-            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" style="width:18px;height:18px;flex:0 0 auto;">
               <path d="M7 10V8a5 5 0 0 1 10 0v2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
               <path d="M6.5 10h11A1.5 1.5 0 0 1 19 11.5v7A1.5 1.5 0 0 1 17.5 20h-11A1.5 1.5 0 0 1 5 18.5v-7A1.5 1.5 0 0 1 6.5 10Z" stroke="currentColor" stroke-width="1.8"/>
             </svg>
-            <input id="password" name="password" type="password" placeholder="请输入密码" autocomplete="current-password" required>
+            <div class="pwd-wrapper">
+              <input id="password" name="password" type="password" placeholder="请输入密码" autocomplete="current-password" required>
+              <button type="button" class="pwd-toggle" id="pwd-toggle-btn" onclick="togglePassword()" aria-label="切换密码可见">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" id="pwd-eye-icon">
+                  <path d="M12 5C7 5 2.73 8.11 1 12c1.73 3.89 6 7 11 7s9.27-3.11 11-7c-1.73-3.89-6-7-11-7z" stroke="currentColor" stroke-width="1.8"/>
+                  <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/>
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
 
-        <button type="submit">登录</button>
+        <script>
+        function togglePassword(){
+          const pwd = document.getElementById('password');
+          const icon = document.getElementById('pwd-eye-icon');
+          if(pwd.type === 'password'){
+            pwd.type = 'text';
+            icon.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 19c-5 0-9.27-3.11-11-7a10.07 10.07 0 0 1 2.22-3.31" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M1 1l22 22" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>';
+          }else{
+            pwd.type = 'password';
+            icon.innerHTML = '<path d="M12 5C7 5 2.73 8.11 1 12c1.73 3.89 6 7 11 7s9.27-3.11 11-7c-1.73-3.89-6-7-11-7z" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/>';
+          }
+        }
+        </script>
+
+        <button type="submit" name="login_submit" value="1">登录</button>
       </form>
     </section>
   </main>
