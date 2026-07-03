@@ -65,40 +65,39 @@ fi
 mv -f "$TMP_BACKUP_FILE" "$BACKUP_FILE"
 echo "[OK] 本地数据库备份完成：$BACKUP_FILE"
 
-# 根据 UPLOAD_FOLDER 路径判断存储模式并同步远程备份
+# 根据存储模式同步远程备份
+# CloudDrive：挂载点是 /mnt/CloudDrive，upload_folder 是其子目录，检查父挂载点+可写性
+# WebDAV：upload_folder 本身就是挂载点
+
+# 远程挂载同步：upload_folder 是挂载点下的子目录
+# 统一用 父挂载点检查 + 目录可写性检测，不依赖子目录的 mountpoint
+REMOTE_OK=false
+REMOTE_LABEL=""
+
 if [[ "$UPLOAD_FOLDER" == "/mnt/webdav_mount"* ]]; then
-    if [ -n "${WEBDAV_SERVICE_NAME:-}" ] && systemctl cat "${WEBDAV_SERVICE_NAME}.service" >/dev/null 2>&1; then
-        if ! mountpoint -q "$UPLOAD_FOLDER"; then
-            echo "[INFO] WebDAV 未挂载，尝试重启：$WEBDAV_SERVICE_NAME.service"
-            systemctl restart "${WEBDAV_SERVICE_NAME}.service" >/dev/null 2>&1 || true
-            sleep 3
-        fi
-    fi
-    if mountpoint -q "$UPLOAD_FOLDER"; then
-        mkdir -p "$REMOTE_BACKUP_ROOT"
-        find "$REMOTE_BACKUP_ROOT" -maxdepth 1 -type f -name '*.sql' -delete || true
-        cp -f "$BACKUP_FILE" "$REMOTE_BACKUP_FILE"
-        echo "[OK] WebDAV 备份已同步到 $REMOTE_BACKUP_FILE"
-    else
-        echo "[WARN] WebDAV 未挂载，仅保留本地备份"
+    REMOTE_LABEL="WebDAV"
+    if mountpoint -q "/mnt/webdav_mount" && [ -d "$UPLOAD_FOLDER" ] && touch "$UPLOAD_FOLDER/.write_test" 2>/dev/null; then
+        rm -f "$UPLOAD_FOLDER/.write_test"
+        REMOTE_OK=true
     fi
 
 elif [[ "$UPLOAD_FOLDER" == "/mnt/CloudDrive"* ]]; then
-    if [ -n "${ASSET_CLOUDDRIVE_BIND_SERVICE_NAME:-}" ] && systemctl cat "${ASSET_CLOUDDRIVE_BIND_SERVICE_NAME}.service" >/dev/null 2>&1; then
-        if ! mountpoint -q "$UPLOAD_FOLDER"; then
-            echo "[INFO] CloudDrive 未接入，尝试重启：$ASSET_CLOUDDRIVE_BIND_SERVICE_NAME.service"
-            systemctl restart "${ASSET_CLOUDDRIVE_BIND_SERVICE_NAME}.service" >/dev/null 2>&1 || true
-            sleep 3
-        fi
+    REMOTE_LABEL="CloudDrive"
+    if mountpoint -q "/mnt/CloudDrive" && [ -d "$UPLOAD_FOLDER" ] && touch "$UPLOAD_FOLDER/.write_test" 2>/dev/null; then
+        rm -f "$UPLOAD_FOLDER/.write_test"
+        REMOTE_OK=true
     fi
-    if mountpoint -q "$UPLOAD_FOLDER"; then
-        mkdir -p "$REMOTE_BACKUP_ROOT"
-        cp -f "$BACKUP_FILE" "$REMOTE_BACKUP_DATED"
-        echo "[OK] CloudDrive 备份已同步到 $REMOTE_BACKUP_DATED"
-    else
-        echo "[WARN] CloudDrive 未接入，仅保留本地备份"
-    fi
+fi
 
+if $REMOTE_OK; then
+    mkdir -p "$REMOTE_BACKUP_ROOT"
+    if [ -n "${REMOTE_LABEL:-}" ]; then
+        cp -f "$BACKUP_FILE" "$REMOTE_BACKUP_DATED"
+        echo "[OK] ${REMOTE_LABEL} 备份已同步到 $REMOTE_BACKUP_DATED"
+    else
+        cp -f "$BACKUP_FILE" "$REMOTE_BACKUP_FILE"
+        echo "[OK] 远程备份已同步到 $REMOTE_BACKUP_FILE"
+    fi
 else
     echo "[OK] 本地存储模式，仅保留本地备份：$BACKUP_FILE"
 fi
