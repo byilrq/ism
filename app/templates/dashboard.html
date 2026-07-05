@@ -1,0 +1,458 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>仪器设备</title>
+<style>
+:root{--bg:#edf1f5;--card:#ffffff;--line:#d9e1ea;--text:#233243;--muted:#677383;--primary:#5f6f82;--primary-soft:#eef2f6;--green:#2f7d67;--green-soft:#edf7f2;--orange:#b88347;--orange-soft:#faf2e8;--purple-soft:#f2eff7;}
+*{box-sizing:border-box;}
+body{font-family:Arial,sans-serif;margin:0;color:var(--text);background:linear-gradient(180deg,#edf1f5 0%,#f7f8fa 34%,#f1f4f8 100%);}
+.wrap{max-width:1240px;margin:auto;padding:18px 14px 26px;}
+.card{background:rgba(255,255,255,.94);border:1px solid rgba(210,218,227,.98);border-radius:22px;padding:18px 18px 16px;margin-bottom:16px;box-shadow:0 16px 40px rgba(27,39,53,.07);backdrop-filter:blur(10px);}
+.topbar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}
+h2{margin:0 0 14px;font-size:26px;color:#263646;letter-spacing:.4px;}
+a{color:#5a6675;}
+input,select,button{padding:11px 12px;font-size:16px;border-radius:12px;border:1px solid #cfd6df;box-sizing:border-box;transition:all .2s ease;}
+input[type=text]{min-width:260px;background:#fbfdff;}
+input[type=text]:focus,select:focus{outline:none;border-color:#9ba8b8;box-shadow:0 0 0 4px rgba(95,111,130,.12);background:#fff;}
+input[type=file]{background:#fff;}
+input[type=checkbox]{accent-color:#5f6f82;width:16px;height:16px;}
+button{background:linear-gradient(135deg,#718194 0%,#556274 100%);color:#fff;border:none;cursor:pointer;font-weight:700;box-shadow:0 8px 18px rgba(46,58,74,.14);}
+button:hover{transform:translateY(-1px);box-shadow:0 12px 22px rgba(46,58,74,.16);}
+button:disabled{cursor:not-allowed;transform:none;box-shadow:none;}
+.btn-green{background:linear-gradient(135deg,#4f8d78 0%,#2f6b58 100%);}
+.btn-gray{background:linear-gradient(135deg,#8b95a1 0%,#697380 100%);}
+.btn-return-secondary{background:linear-gradient(135deg,#8f2d4b 0%,#6f1d36 100%);box-shadow:0 10px 18px rgba(111,29,54,.20);}
+.btn-return-secondary:hover{background:linear-gradient(135deg,#9d3656 0%,#7c2140 100%);box-shadow:0 12px 22px rgba(111,29,54,.24);}
+.btn-upload-primary{background:linear-gradient(135deg,#67c9ff 0%,#3388ff 100%);box-shadow:0 10px 18px rgba(54,132,255,.2);}
+.btn-upload-primary:hover{background:linear-gradient(135deg,#7ad1ff 0%,#247dff 100%);}
+.btn-save-primary{background:linear-gradient(135deg,#54ddb1 0%,#159f76 100%);box-shadow:0 10px 18px rgba(21,159,118,.2);}
+.btn-save-primary:hover{background:linear-gradient(135deg,#64e4ba 0%,#0f956d 100%);}
+.btn-orange{background:linear-gradient(135deg,#c39a68 0%,#a9753a 100%);}
+.btn-red{background:linear-gradient(135deg,#d06f72 0%,#b34f55 100%);}
+.btn-search-home{background:linear-gradient(135deg,#67c9ff 0%,#3388ff 100%);box-shadow:0 10px 18px rgba(54,132,255,.2);}
+.btn-search-home:hover{background:linear-gradient(135deg,#7ad1ff 0%,#247dff 100%);}
+.btn-reset-home{background:linear-gradient(135deg,#c5ccd4 0%,#97a2af 100%);box-shadow:0 8px 16px rgba(99,116,135,.16);}
+.btn-reset-home:hover{background:linear-gradient(135deg,#d0d7df 0%,#8d98a6 100%);}
+.btn-add-home{background:linear-gradient(135deg,#54ddb1 0%,#159f76 100%);box-shadow:0 10px 18px rgba(21,159,118,.2);}
+.btn-add-home:hover{background:linear-gradient(135deg,#64e4ba 0%,#0f956d 100%);}
+.btn-disabled{background:#adb5bd !important;color:#fff !important;cursor:not-allowed;pointer-events:none;box-shadow:none !important;}
+.table-wrap{overflow-x:auto;border:1px solid #d7dee7;border-radius:16px;background:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.8),0 8px 22px rgba(27,39,53,.04);}
+table{width:100%;border-collapse:separate;border-spacing:0;min-width:940px;}
+th,td{padding:11px 10px;text-align:left;border:none;border-right:1px solid #e7eef7;border-bottom:1px solid #e7eef7;vertical-align:middle;font-size:15px;font-weight:400;color:#6f7b88;}th:last-child,td:last-child{border-right:none;}
+thead th{position:sticky;top:0;z-index:1;background:linear-gradient(180deg,#fafbfd 0%,#eff2f6 100%);color:#5e6977;font-weight:600;white-space:nowrap;}
+tbody tr:last-child td{border-bottom:none;}
+tbody tr.result-row{transition:transform .16s ease,box-shadow .16s ease;}
+tbody tr.result-row td:first-child{border-left:4px solid transparent;}
+tbody tr.result-row:nth-child(4n+1) td{background:#fbfcfd;}
+tbody tr.result-row:nth-child(4n+2) td{background:#f8fafb;}
+tbody tr.result-row:nth-child(4n+3) td{background:#fcfbf8;}
+tbody tr.result-row:nth-child(4n+4) td{background:#f9f8fb;}
+tbody tr.result-row:hover td{background:#eff3f7;}
+tbody tr.result-row:hover{transform:translateY(-1px);box-shadow:0 10px 22px rgba(42,56,74,.08);}
+tbody tr.result-row-asset td:first-child{border-left-color:#8fa8c2;}
+tbody tr.result-row-accessory td:first-child{border-left-color:#95b6a1;}
+tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding:20px 12px;}
+.err{color:#dc2626;margin-top:10px;font-weight:700;}
+.num-link{color:#4e5865;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px;font-weight:400;font-size:18px;}
+.num-link:hover{color:#3f4853;text-decoration:underline;}
+.sort-link{display:inline-flex;align-items:center;gap:4px;color:#5e6977;text-decoration:none;font-weight:600;}
+.sort-link:hover{color:#3f4853;text-decoration:none;}
+.action-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+.pagination{margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+.pagination a,.pagination span{display:inline-flex;align-items:center;justify-content:center;min-height:38px;padding:0 14px;border-radius:999px;border:1px solid #d7e3f1;background:#fff;color:#334155;text-decoration:none;}
+.pagination a:hover{background:#f1f4f7;border-color:#c7d0db;}
+.muted{color:var(--muted);font-size:14px;line-height:1.6;}.num-link{color:#4e5865;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px;font-weight:400;font-size:18px;}.num-link:hover{color:#3f4853;text-decoration:underline;}
+.summary-badge{display:inline-flex;align-items:center;padding:8px 14px;border-radius:999px;background:var(--primary-soft);color:#4a5767;font-weight:700;border:1px solid #d4dbe4;}
+.icon-only-btn{width:44px;min-width:44px;height:44px;padding:0;display:inline-flex;align-items:center;justify-content:center;}
+.icon-only-btn svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;}
+.power-link{display:inline-flex;text-decoration:none;}
+.btn-power{width:28px;min-width:28px;height:28px;padding:0;border:none;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:radial-gradient(circle at 32% 28%,#f47d82 0%,#e45f65 34%,#cb4049 70%,#aa2733 100%);box-shadow:inset 0 2px 3px rgba(255,255,255,.38),inset 0 -6px 10px rgba(120,10,20,.18),0 2px 0 #8f1f2b,0 8px 16px rgba(146,24,36,.28);color:#fff;position:relative;}
+.btn-power::before{content:'';position:absolute;inset:3px;border-radius:999px;border:1.2px solid rgba(120,18,28,.28);box-shadow:inset 0 1px 0 rgba(255,255,255,.18);}
+.btn-power svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 1px 0 rgba(120,10,20,.18));position:relative;z-index:1;}
+.btn-power:hover{background:radial-gradient(circle at 32% 28%,#fb8d92 0%,#ea676d 34%,#d24750 70%,#b12c37 100%);box-shadow:inset 0 2px 3px rgba(255,255,255,.42),inset 0 -6px 10px rgba(120,10,20,.22),0 2px 0 #8f1f2b,0 12px 22px rgba(146,24,36,.36);}
+.switch-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
+.switch-row a{flex:1 1 160px;}
+.switch-row a button{width:100%;}
+.switch-row .tab-btn{background:linear-gradient(180deg,#f9fbfd 0%,#eef3f7 100%);color:#677383;border:1px solid #d8e0e8;box-shadow:inset 0 1px 0 rgba(255,255,255,.86),0 5px 12px rgba(63,78,96,.06);font-weight:800;letter-spacing:.2px;}
+.switch-row .tab-btn:hover{background:linear-gradient(180deg,#ffffff 0%,#edf3f8 100%);color:#4d5b6b;border-color:#c8d4df;box-shadow:inset 0 1px 0 rgba(255,255,255,.92),0 10px 18px rgba(63,78,96,.1);}
+.switch-row .tab-btn.tab-active-asset{background:#ead8aa;color:#6b5630;border-color:#d8c18a;box-shadow:inset 0 1px 0 rgba(255,255,255,.62),0 10px 18px rgba(161,138,84,.16);text-shadow:none;}
+.switch-row .tab-btn.tab-active-asset:hover{background:#e4cf9a;color:#5f4c2b;border-color:#ccb277;box-shadow:inset 0 1px 0 rgba(255,255,255,.62),0 12px 20px rgba(161,138,84,.2);transform:translateY(-1px);}
+.simple-modal{position:fixed;inset:0;background:rgba(15,23,42,.52);display:none;align-items:center;justify-content:center;z-index:10000;padding:18px;}.simple-modal.show{display:flex;}.simple-modal-card{width:100%;max-width:380px;background:#fff;border-radius:18px;padding:22px 20px;box-shadow:0 18px 50px rgba(15,23,42,.28);}.simple-modal-title{font-size:22px;font-weight:800;color:#111827;text-align:center;margin-bottom:10px;}.simple-modal-text{font-size:18px;font-weight:600;line-height:1.7;color:#1f2937;text-align:center;margin-bottom:14px;white-space:pre-line;}.simple-modal-input-wrap{display:none;margin-bottom:12px;}.simple-modal-input-wrap.show{display:block;}.simple-modal-input{width:100%;box-sizing:border-box;padding:12px 14px;font-size:18px;font-weight:700;border-radius:12px;border:2px solid #9ca3af;color:#111827;}.simple-modal-input:focus{outline:none;border-color:#374151;box-shadow:0 0 0 3px rgba(55,65,81,.12);}.simple-modal-error{min-height:24px;font-size:16px;font-weight:700;color:#b91c1c;text-align:center;margin-bottom:6px;}.simple-modal-actions{display:flex;gap:12px;justify-content:center;margin-top:6px;}.simple-modal-actions button{width:auto;min-width:118px;padding:11px 18px;font-size:17px;font-weight:700;border-radius:12px;border:none;}.simple-modal-cancel{background:#6b7280;color:#fff;}.simple-modal-ok{background:#b91c1c;color:#fff;}@media (max-width:768px){.wrap{padding:12px;}.card{padding:14px;margin-bottom:14px;border-radius:14px;}.topbar{gap:8px;}.switch-row{gap:8px;margin-bottom:12px;}.switch-row a{flex:1 1 160px;}h2{font-size:22px;}.action-bar{gap:8px;}.action-bar button{width:auto;}.pagination{justify-content:flex-start;gap:10px;}.pagination a,.pagination span{font-size:14px;}.simple-modal{padding:16px;}.simple-modal-card{border-radius:16px;padding:18px 16px;}.simple-modal-title{font-size:20px;}.simple-modal-text{font-size:16px;}.simple-modal-input{padding:10px 12px;font-size:16px;border-radius:8px;}.simple-modal-actions button{min-width:108px;padding:10px 16px;font-size:16px;border-radius:10px;}input,select,button{padding:10px;font-size:16px;border-radius:8px;}input[type=text]{width:100%;min-width:0;}.icon-only-btn{width:42px;min-width:42px;height:42px;padding:0;}}
+
+.asset-search-table th:nth-child(2),.asset-search-table td:nth-child(2),
+.asset-search-table th:nth-child(3),.asset-search-table td:nth-child(3),
+.asset-search-table th:nth-child(5),.asset-search-table td:nth-child(5),
+.asset-location-table th:nth-child(1),.asset-location-table td:nth-child(1),
+.asset-location-table th:nth-child(2),.asset-location-table td:nth-child(2),
+.asset-accessory-table th:nth-child(1),.asset-accessory-table td:nth-child(1),
+.asset-accessory-table th:nth-child(2),.asset-accessory-table td:nth-child(2){white-space:nowrap;}
+.asset-search-table th:nth-child(2),.asset-search-table td:nth-child(2),
+.asset-search-table th:nth-child(3),.asset-search-table td:nth-child(3){width:16%;}
+.asset-search-table th:nth-child(4),.asset-search-table td:nth-child(4){width:23.25%;}
+.asset-search-table th:nth-child(5),.asset-search-table td:nth-child(5){width:12.75%;min-width:109px;}
+@media (max-width:768px){
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+.table-wrap table{width:max-content;table-layout:auto !important;}
+.asset-search-table{min-width:1220px !important;}
+.asset-location-table{min-width:1120px !important;}
+.asset-accessory-table{min-width:980px !important;}
+.asset-search-table th:nth-child(2),.asset-search-table td:nth-child(2),
+.asset-search-table th:nth-child(3),.asset-search-table td:nth-child(3){width:auto !important;min-width:192px;white-space:nowrap !important;overflow:visible !important;text-overflow:clip !important;}
+.asset-search-table th:nth-child(4),.asset-search-table td:nth-child(4){width:auto !important;min-width:250px;}
+.asset-search-table th:nth-child(5),.asset-search-table td:nth-child(5){width:auto !important;min-width:141px;white-space:nowrap !important;overflow:visible !important;text-overflow:clip !important;}
+.asset-location-table th:nth-child(1),.asset-location-table td:nth-child(1),
+.asset-location-table th:nth-child(2),.asset-location-table td:nth-child(2),
+.asset-accessory-table th:nth-child(1),.asset-accessory-table td:nth-child(1),
+.asset-accessory-table th:nth-child(2),.asset-accessory-table td:nth-child(2){width:auto !important;min-width:220px;white-space:nowrap !important;overflow:visible !important;text-overflow:clip !important;}
+.table-wrap table .num-link{display:inline-block;white-space:nowrap !important;overflow:visible !important;text-overflow:clip !important;max-width:none !important;word-break:normal !important;}
+}
+</style>
+<script>
+function getVisibleSelectionInputs(){
+    return Array.from(document.querySelectorAll('#asset-batch-form input[type="checkbox"][name="selected_items"]'));
+}
+
+function getAllFilteredSelectedItems(){
+    return {{ all_filtered_selected_items|tojson }} || [];
+}
+
+function getSelectedItemValues(){
+    const form = document.getElementById('asset-batch-form');
+    if(!form){ return []; }
+    const selected = [];
+    form.querySelectorAll('input[name="selected_items"]').forEach(function(el){
+        if(el.type === 'hidden'){
+            selected.push(el.value);
+        }else if(el.checked){
+            selected.push(el.value);
+        }
+    });
+    return selected;
+}
+
+function clearAllFilteredHiddenSelections(){
+    const form = document.getElementById('asset-batch-form');
+    if(!form){ return; }
+    const box = document.getElementById('all-filtered-selected-box');
+    if(box){ box.innerHTML = ''; }
+}
+
+function syncAllFilteredSelection(source){
+    const form = document.getElementById('asset-batch-form');
+    if(!form){ return; }
+    const box = document.getElementById('all-filtered-selected-box');
+    if(!box){ return; }
+    box.innerHTML = '';
+    const visibleItems = getVisibleSelectionInputs();
+    if(source.checked){
+        visibleItems.forEach(function(item){ item.checked = true; });
+        const visibleValues = new Set(visibleItems.map(function(item){ return item.value; }));
+        getAllFilteredSelectedItems().forEach(function(value){
+            if(visibleValues.has(value)){ return; }
+            const hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.name = 'selected_items';
+            hidden.value = value;
+            box.appendChild(hidden);
+        });
+    }else{
+        visibleItems.forEach(function(item){ item.checked = false; });
+    }
+}
+
+function clearGlobalSelectionState(){
+    const master = document.getElementById('select-all-filtered');
+    if(master && master.checked){
+        master.checked = false;
+        clearAllFilteredHiddenSelections();
+    }
+}
+
+const deleteModalState = { onOk: null, onCancel: null };
+function closeDeleteModal(){
+    const modal = document.getElementById('delete-modal');
+    if(modal){ modal.classList.remove('show'); }
+    const inputWrap = document.getElementById('delete-modal-input-wrap');
+    const input = document.getElementById('delete-modal-input');
+    const error = document.getElementById('delete-modal-error');
+    const cancelBtn = document.getElementById('delete-modal-cancel');
+    const okBtn = document.getElementById('delete-modal-ok');
+    if(inputWrap){ inputWrap.classList.remove('show'); }
+    if(input){ input.value = ''; }
+    if(error){ error.textContent = ''; }
+    if(cancelBtn){ cancelBtn.style.display = 'inline-block'; }
+    if(okBtn){ okBtn.textContent = '确定'; }
+    deleteModalState.onOk = null;
+    deleteModalState.onCancel = null;
+}
+function openDeleteModal(config){
+    const modal = document.getElementById('delete-modal');
+    const title = document.getElementById('delete-modal-title');
+    const text = document.getElementById('delete-modal-text');
+    const inputWrap = document.getElementById('delete-modal-input-wrap');
+    const input = document.getElementById('delete-modal-input');
+    const error = document.getElementById('delete-modal-error');
+    const cancelBtn = document.getElementById('delete-modal-cancel');
+    const okBtn = document.getElementById('delete-modal-ok');
+    if(!modal || !title || !text || !inputWrap || !input || !error || !cancelBtn || !okBtn){ return; }
+    title.textContent = config.title || '提示';
+    text.textContent = config.text || '';
+    error.textContent = '';
+    input.value = '';
+    if(config.showPin){
+        inputWrap.classList.add('show');
+        window.setTimeout(() => { try { input.focus(); } catch(e){} }, 30);
+    }else{
+        inputWrap.classList.remove('show');
+    }
+    cancelBtn.style.display = config.hideCancel ? 'none' : 'inline-block';
+    okBtn.textContent = config.okText || '确定';
+    deleteModalState.onOk = typeof config.onOk === 'function' ? config.onOk : null;
+    deleteModalState.onCancel = typeof config.onCancel === 'function' ? config.onCancel : null;
+    modal.classList.add('show');
+}
+function handleDeleteModalCancel(){
+    const fn = deleteModalState.onCancel;
+    closeDeleteModal();
+    if(fn){ fn(); }
+}
+function handleDeleteModalOk(){
+    if(!deleteModalState.onOk){ closeDeleteModal(); return; }
+    const result = deleteModalState.onOk();
+    if(result !== false){ closeDeleteModal(); }
+}
+function showDeleteNotice(message){
+    openDeleteModal({ title:'提示', text: message || '请确认操作', hideCancel: true, onOk: function(){ return true; } });
+}
+function showDeletePinDialog(onSubmit){
+    openDeleteModal({
+        title:'Pin码确认',
+        text:'请输入4位Pin码',
+        showPin:true,
+        onOk:function(){
+            const input = document.getElementById('delete-modal-input');
+            const error = document.getElementById('delete-modal-error');
+            const pin = (input && input.value ? input.value : '').trim();
+            if(!pin){ if(error){ error.textContent = '请输入4位Pin码'; } return false; }
+            if(pin !== '0819'){ if(error){ error.textContent = 'Pin码错误'; } return false; }
+            if(typeof onSubmit === 'function'){ onSubmit(pin); }
+            return true;
+        }
+    });
+}
+function openDeleteFlow(message, onPinConfirmed){
+    openDeleteModal({
+        title:'删除确认',
+        text: message || '确认删除吗？',
+        onOk:function(){
+            showDeletePinDialog(onPinConfirmed);
+            return false;
+        }
+    });
+    return false;
+}
+
+document.addEventListener('DOMContentLoaded', function(){
+    const importSummaryText = {{ import_summary_text|tojson }};
+    const importErrorText = {{ import_error|tojson }};
+    if(importErrorText){
+        openDeleteModal({
+            title:'上传失败',
+            text: importErrorText,
+            hideCancel: true,
+            okText: '知道了',
+            onOk: function(){ return true; }
+        });
+    }else if(importSummaryText){
+        openDeleteModal({
+            title:'上传完成',
+            text: importSummaryText,
+            hideCancel: true,
+            okText: '知道了',
+            onOk: function(){ return true; }
+        });
+    }
+    getVisibleSelectionInputs().forEach(function(item){
+        item.addEventListener('change', clearGlobalSelectionState);
+    });
+});
+
+function confirmDeleteSelected(){
+    const selectedValues = getSelectedItemValues();
+    if(selectedValues.length === 0){ showDeleteNotice('请先勾选要删除的资产'); return false; }
+    const assetIds = new Set();
+    const accessoryIds = new Set();
+    selectedValues.forEach(function(value){
+        const parts = String(value || '').split(':');
+        if(parts.length !== 2){ return; }
+        if(parts[0] === 'asset'){ assetIds.add(parts[1]); }
+        if(parts[0] === 'accessory'){ accessoryIds.add(parts[1]); }
+    });
+    const assetCount = assetIds.size;
+    const accessoryCount = accessoryIds.size;
+    return openDeleteFlow(`将删除 ${assetCount} 条主设备、${accessoryCount} 条配件`, function(pin){
+        document.getElementById('delete_pin').value = pin;
+        const form = document.getElementById('asset-batch-form');
+        if(form){
+            form.action = '/delete_selected';
+            form.method = 'post';
+            form.submit();
+        }
+    });
+}
+</script>
+</head>
+<body>
+<div class="wrap">
+    <div class="card">
+        <div class="topbar">
+            <div><strong>当前用户：</strong>{{ user_display }}</div>
+            <div>{% if current_user.is_authenticated %}<a href="/logout" title="退出登录" class="power-link"><button type="button" class="btn-power" aria-label="退出登录"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8"></path><path d="M7.05 5.05a9 9 0 1 0 9.9 0"></path></svg></button></a>{% endif %}</div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="switch-row">
+            <a href="/"><button type="button" class="tab-btn tab-active-asset">仪器设备</button></a>
+            <a href="/cable"><button type="button" class="tab-btn">电缆</button></a>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+            <h2 style="margin:0;">仪器设备</h2>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                {% if can_manage %}
+                <a href="/device/new" title="新增设备"><button type="button" class="btn-green icon-only-btn" aria-label="新增设备" style="border-radius:12px;font-size:24px;font-weight:700;">+</button></a>
+                {% else %}
+                <button type="button" class="btn-disabled icon-only-btn" disabled style="border-radius:12px;font-size:24px;font-weight:700;">+</button>
+                {% endif %}
+                <a href="/scan_label?auto=1" title="条形码扫描"><button type="button" class="btn-gray icon-only-btn" aria-label="条形码扫描">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M8 4H6a2 2 0 0 0-2 2v2"></path><path d="M16 4h2a2 2 0 0 1 2 2v2"></path><path d="M8 20H6a2 2 0 0 1-2-2v-2"></path><path d="M16 20h2a2 2 0 0 0 2-2v-2"></path><path d="M5 12h14"></path>
+                    </svg>
+                </button></a>
+                <a href="/scan_label_image" title="标签识别"><button type="button" class="btn-orange icon-only-btn" aria-label="标签识别">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M8 4H6a2 2 0 0 0-2 2v2"></path><path d="M16 4h2a2 2 0 0 1 2 2v2"></path><path d="M8 20H6a2 2 0 0 1-2-2v-2"></path><path d="M16 20h2a2 2 0 0 0 2-2v-2"></path><path d="M5 12h14"></path>
+                    </svg>
+                </button></a>
+            </div>
+        </div>
+        <form method="get" action="/">
+            <input type="hidden" name="searched" value="1">
+            <input type="hidden" name="sort_field" value="{{ sort_field }}">
+            <input type="hidden" name="sort_order" value="{{ sort_order }}">
+            <div class="action-bar">
+                <input type="text" name="keyword" value="{{ keyword }}" placeholder="编号/后6位、责任人、位置、备注、名称">
+                <select name="status_filter">
+                    <option value="" disabled selected>状态</option>
+                    {% for s in statuses %}
+                    <option value="{{ s.dict_value }}" {% if status_filter == s.dict_value %}selected{% endif %}>{{ s.dict_value }}</option>
+                    {% endfor %}
+                </select>
+                <select name="device_type_filter">
+                    <option value="" disabled selected>类型</option>
+                    <option value="主设备" {% if device_type_filter == '主设备' %}selected{% endif %}>主设备</option>
+                    <option value="配件" {% if device_type_filter == '配件' %}selected{% endif %}>配件</option>
+                </select>
+                <button type="submit" class="btn-search-home">搜索</button>
+                <a href="/"><button type="button" class="btn-reset-home">重置</button></a>
+            </div>
+        </form>
+
+        <form id="upload-form" method="post" enctype="multipart/form-data" style="margin-top:12px;">
+            <div class="action-bar">
+                <input type="file" name="excel_file" id="upload-file-input" accept=".xlsx,.xlsm,.xltx,.xltm" style="display:none;" {% if not can_manage %}disabled{% endif %}>
+                <button type="button" id="upload-select-btn" class="btn-gray" onclick="document.getElementById('upload-file-input').click();" style="width:auto;min-width:120px;" {% if not can_manage %}disabled{% endif %}>选择文件</button>
+                <button type="submit" class="btn-orange {% if not can_manage %}btn-disabled{% endif %}" onclick="document.getElementById('upload-form').action='/import_devices';" {% if not can_manage %}disabled{% endif %}>上传设备</button>
+                <button type="submit" class="btn-orange {% if not can_manage %}btn-disabled{% endif %}" onclick="document.getElementById('upload-form').action='/import_accessories';" {% if not can_manage %}disabled{% endif %}>上传配件</button>
+                {% if import_log_url %}<a href="{{ import_log_url }}"><button type="button" class="btn-gray">下载失败日志</button></a>{% endif %}
+            </div>
+            <div class="muted" style="margin-top:8px;">上传设备：普通导入。上传配件：根据配件编号匹配主资产，未匹配则跳过。</div>
+        </form>
+        <script>
+        document.getElementById('upload-file-input').addEventListener('change', function(){
+            const btn = document.getElementById('upload-select-btn');
+            if(this.files && this.files.length > 0){
+                btn.textContent = this.files[0].name;
+                btn.className = 'btn-green';
+            }else{
+                btn.textContent = '选择文件';
+                btn.className = 'btn-gray';
+            }
+        });
+        </script>
+        {% if error %}<div class="err">{{ error }}</div>{% endif %}
+    </div>
+
+    {% if searched %}
+    <div class="card">
+        <form id="asset-batch-form" method="post" action="/export">
+            <div id="all-filtered-selected-box"></div>
+            <input type="hidden" name="keyword" value="{{ keyword }}">
+            <input type="hidden" name="status_filter" value="{{ status_filter }}">
+            <input type="hidden" name="device_type_filter" value="{{ device_type_filter }}">
+            <input type="hidden" name="per_page" value="{{ per_page }}">
+            <input type="hidden" name="sort_field" value="{{ sort_field }}">
+            <input type="hidden" name="sort_order" value="{{ sort_order }}">
+            <input type="hidden" name="delete_pin" id="delete_pin" value="">
+            <div class="action-bar" style="margin-bottom:10px;">
+                <button type="submit" class="btn-green">导出选中</button>
+                <button type="submit" class="btn-red {% if not can_manage %}btn-disabled{% endif %}" formaction="/delete_selected" formmethod="post" onclick="return {% if can_manage %}confirmDeleteSelected(){% else %}false{% endif %};" {% if not can_manage %}disabled{% endif %}>删除选中</button>
+                <div class="summary-badge">当前总数：{{ total }}</div>
+            </div>
+            <div class="table-wrap">
+                <table class="asset-search-table">
+                    <thead>
+                        <tr>
+                            <th><input type="checkbox" id="select-all-filtered" onclick="syncAllFilteredSelection(this)" title="选中当前筛选结果全部"></th>
+                            <th>集团编号</th><th>内部编号</th><th>资产名称</th><th>位置</th><th>状态</th><th>责任人</th>
+                            <th>
+                                <a class="sort-link" href="/?searched=1&keyword={{ keyword }}&status_filter={{ status_filter }}&device_type_filter={{ device_type_filter }}&per_page={{ per_page }}&page=1&sort_field=asset_date&sort_order={% if sort_field == 'asset_date' and sort_order == 'desc' %}asc{% else %}desc{% endif %}">
+                                    时间{% if sort_field == 'asset_date' %}{{ ' ↑' if sort_order == 'asc' else ' ↓' }}{% else %} ↕{% endif %}
+                                </a>
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in rows %}
+                        <tr class="result-row result-row-{{ item.row_type }}">
+                            <td><input type="checkbox" name="selected_items" value="{{ item.row_type }}:{{ item.id }}" data-row-type="{{ item.row_type }}" data-row-id="{{ item.id }}" data-parent-asset-id="{{ item.parent_asset_id }}" data-accessory-count="{{ item.accessory_count }}"></td>
+                            <td><a class="num-link" href="{{ item.detail_url }}">{{ item.group_no }}</a></td>
+                            <td><a class="num-link" href="{{ item.detail_url }}">{{ item.internal_no }}</a></td>
+                            <td>{{ item.name }}</td>
+                            <td>{% if item.location_detail_url %}<a class="num-link" href="{{ item.location_detail_url }}">{{ item.location }}</a>{% else %}{{ item.location or '' }}{% endif %}</td>
+                            <td>{{ item.status }}</td><td>{{ item.owner }}</td><td>{{ item.asset_date_text or "" }}</td>
+                        </tr>
+                        {% endfor %}
+                        {% if not rows %}<tr class="empty-row"><td colspan="8">暂无数据</td></tr>{% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </form>
+        <div class="pagination">
+            {% if page > 1 %}<a href="/?searched=1&keyword={{ keyword }}&status_filter={{ status_filter }}&device_type_filter={{ device_type_filter }}&per_page={{ per_page }}&page={{ page - 1 }}&sort_field={{ sort_field }}&sort_order={{ sort_order }}">上一页</a>{% endif %}
+            <span>第 {{ page }} / {{ total_pages }} 页</span>
+            {% if page < total_pages %}<a href="/?searched=1&keyword={{ keyword }}&status_filter={{ status_filter }}&device_type_filter={{ device_type_filter }}&per_page={{ per_page }}&page={{ page + 1 }}&sort_field={{ sort_field }}&sort_order={{ sort_order }}">下一页</a>{% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+<div id="delete-modal" class="simple-modal" onclick="if(event.target===this){closeDeleteModal();}">
+    <div class="simple-modal-card">
+        <div id="delete-modal-title" class="simple-modal-title">删除确认</div>
+        <div id="delete-modal-text" class="simple-modal-text">确认删除吗？</div>
+        <div id="delete-modal-input-wrap" class="simple-modal-input-wrap">
+            <input id="delete-modal-input" class="simple-modal-input" type="password" inputmode="numeric" maxlength="4" placeholder="请输入4位Pin码">
+        </div>
+        <div id="delete-modal-error" class="simple-modal-error"></div>
+        <div class="simple-modal-actions">
+            <button type="button" id="delete-modal-cancel" class="simple-modal-cancel" onclick="handleDeleteModalCancel();">取消</button>
+            <button type="button" id="delete-modal-ok" class="simple-modal-ok" onclick="handleDeleteModalOk();">确定</button>
+        </div>
+    </div>
+</div>
+
+</div>
+</body>
+</html>

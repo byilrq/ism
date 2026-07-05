@@ -1,0 +1,416 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>新增设备</title>
+<style>
+:root{--bg:#edf1f5;--card:#ffffff;--line:#d9e1ea;--text:#233243;--muted:#677383;--primary:#5f6f82;--primary-soft:#eef2f6;--green:#2f7d67;--orange:#b88347;--danger:#dc2626;}
+*{box-sizing:border-box;}
+body{font-family:Arial,sans-serif;margin:0;color:var(--text);background:linear-gradient(180deg,#edf1f5 0%,#f7f8fa 34%,#f1f4f8 100%);}
+.wrap{max-width:900px;margin:auto;padding:16px 14px 26px;}
+.card{background:rgba(255,255,255,.94);border:1px solid rgba(210,218,227,.98);border-radius:22px;padding:18px 18px 16px;margin-bottom:16px;box-shadow:0 16px 40px rgba(27,39,53,.07);backdrop-filter:blur(10px);}
+h2{margin:0 0 14px;font-size:26px;color:#263646;letter-spacing:.4px;}
+a{color:#5a6675;}
+.row{margin-bottom:12px;}
+label{display:block;margin-bottom:6px;font-weight:600;color:#5e6977;}
+input,select,textarea,button{width:100%;box-sizing:border-box;padding:10px 12px;font-size:16px;border-radius:12px;border:1px solid #cfd6df;transition:all .2s ease;}
+input[type=text],input[type=date],input[type=password],select,textarea{background:#fbfdff;}
+input[type=text]:focus,input[type=date]:focus,input[type=password]:focus,select:focus,textarea:focus{outline:none;border-color:#9ba8b8;box-shadow:0 0 0 4px rgba(95,111,130,.12);background:#fff;}
+input[type=file]{background:#fff;}
+input[type=checkbox]{accent-color:#5f6f82;width:16px;height:16px;}
+textarea{min-height:90px;resize:vertical;}
+button{background:linear-gradient(135deg,#718194 0%,#556274 100%);color:#fff;border:none;cursor:pointer;font-weight:700;box-shadow:0 8px 18px rgba(46,58,74,.14);}
+button:hover{transform:translateY(-1px);box-shadow:0 12px 22px rgba(46,58,74,.16);}
+button:disabled{cursor:not-allowed;transform:none;box-shadow:none;}
+.btn-green{background:linear-gradient(135deg,#4f8d78 0%,#2f6b58 100%);}
+.btn-gray{background:linear-gradient(135deg,#8b95a1 0%,#697380 100%);}.btn-return-secondary{background:linear-gradient(135deg,#8f2d4b 0%,#6f1d36 100%);box-shadow:0 10px 18px rgba(111,29,54,.20);}.btn-return-secondary:hover{background:linear-gradient(135deg,#9d3656 0%,#7c2140 100%);box-shadow:0 12px 22px rgba(111,29,54,.24);}
+.btn-orange{background:linear-gradient(135deg,#c39a68 0%,#a9753a 100%);}
+.btn-red{background:linear-gradient(135deg,#d06f72 0%,#b34f55 100%);}
+.btn-disabled{background:#adb5bd !important;color:#fff !important;cursor:not-allowed;pointer-events:none;box-shadow:none !important;}
+.readonly{background:#eef2f6;color:#677383;border-color:#d8e0e8;}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+.table-wrap{overflow-x:auto;border:1px solid #d7dee7;border-radius:16px;background:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.8),0 8px 22px rgba(27,39,53,.04);}
+table{width:100%;border-collapse:separate;border-spacing:0;min-width:780px;}
+th,td{padding:11px 10px;text-align:left;border:none;border-right:1px solid #e7eef7;border-bottom:1px solid #e7eef7;vertical-align:middle;font-size:15px;font-weight:400;color:#6f7b88;}th:last-child,td:last-child{border-right:none;}
+thead th{background:linear-gradient(180deg,#fafbfd 0%,#eff2f6 100%);color:#5e6977;font-weight:600;white-space:nowrap;}
+tbody tr:last-child td{border-bottom:none;}
+tbody tr.result-row{transition:transform .16s ease,box-shadow .16s ease;}
+tbody tr.result-row td:first-child{border-left:4px solid transparent;}
+tbody tr.result-row:nth-child(4n+1) td{background:#fbfcfd;}
+tbody tr.result-row:nth-child(4n+2) td{background:#f8fafb;}
+tbody tr.result-row:nth-child(4n+3) td{background:#fcfbf8;}
+tbody tr.result-row:nth-child(4n+4) td{background:#f9f8fb;}
+tbody tr.result-row:hover td{background:#eff3f7;}
+tbody tr.result-row:hover{transform:translateY(-1px);box-shadow:0 10px 22px rgba(42,56,74,.08);}
+tbody tr.result-row-asset td:first-child{border-left-color:#8fa8c2;}
+tbody tr.result-row-accessory td:first-child{border-left-color:#95b6a1;}
+tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding:20px 12px;}
+.msg{color:#15803d;margin-bottom:12px;font-weight:700;background:#eef8f3;border:1px solid #cfe4d9;border-radius:12px;padding:10px 12px;}
+.err{color:#dc2626;margin-bottom:12px;font-weight:700;background:#fbf1f2;border:1px solid #e7cfd3;border-radius:12px;padding:10px 12px;}
+.image-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;padding:10px 12px;background:#fafbfd;border:1px solid #dde4ec;border-radius:12px;}
+.upload-actions{display:flex;gap:8px;flex-wrap:wrap;}
+.upload-actions button{width:auto;min-width:120px;}
+.file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
+.upload-preview-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}.upload-preview-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #e1e7ef;border-radius:10px;background:#fbfdff;color:#4d5b6b;}.upload-preview-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.upload-remove-btn{width:28px;min-width:28px;height:28px;padding:0;border-radius:999px;background:#dc2626;color:#fff;border:none;box-shadow:none;font-weight:900;line-height:1;display:inline-flex;align-items:center;justify-content:center;}
+.upload-dialog{position:fixed;inset:0;background:rgba(15,23,42,.52);display:none;align-items:center;justify-content:center;z-index:10000;padding:18px;} .upload-dialog.show{display:flex;} .upload-dialog-card{width:100%;max-width:320px;background:#fff;border-radius:18px;padding:22px 20px;box-shadow:0 18px 50px rgba(15,23,42,.28);}
+.upload-dialog-title{font-size:18px;font-weight:bold;margin-bottom:12px;text-align:center;color:#163047;}
+.upload-dialog-actions{display:flex;flex-direction:column;gap:10px;}
+.upload-dialog-actions button{width:100%;}
+.upload-choice-file{position:relative;display:block;width:100%;box-sizing:border-box;padding:10px;font-size:16px;border-radius:12px;border:1px solid #cfd9e6;color:#fff;text-align:center;overflow:hidden;box-shadow:0 8px 18px rgba(46,58,74,.14);}
+.upload-choice-camera{background:linear-gradient(135deg,#67c9ff 0%,#3388ff 100%);box-shadow:0 10px 18px rgba(54,132,255,.2);}
+.upload-choice-local{background:linear-gradient(135deg,#54ddb1 0%,#159f76 100%);box-shadow:0 10px 18px rgba(21,159,118,.2);}
+.upload-choice-file input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;}
+.upload-dialog-actions .btn-cancel{background:linear-gradient(135deg,#c5ccd4 0%,#97a2af 100%);box-shadow:0 8px 16px rgba(99,116,135,.16);}
+.title-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:nowrap;margin-bottom:14px;}
+.title-row h2{margin:0;flex:0 1 auto;}
+.title-actions{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:nowrap;margin-left:auto;flex:0 0 auto;}
+.title-actions > *{flex:0 0 auto;}
+.title-actions button{width:auto;min-width:96px;padding:10px 14px;}
+.detail-actions{display:flex;gap:20px;flex-wrap:nowrap;align-items:center;justify-content:space-between;margin-top:12px;}
+.detail-actions button{width:auto;min-width:118px;padding:10px 14px;flex:0 0 auto;}
+.link-row{margin-top:-2px;margin-bottom:12px;color:#607284;font-size:14px;}
+.muted{color:var(--muted);font-size:14px;line-height:1.6;}.num-link{color:#4e5865;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px;font-weight:400;font-size:18px;}.num-link:hover{color:#3f4853;text-decoration:underline;}
+.simple-modal{position:fixed;inset:0;background:rgba(15,23,42,.52);display:none;align-items:center;justify-content:center;z-index:10000;padding:18px;}
+.simple-modal.show{display:flex;}
+.simple-modal-card{width:100%;max-width:380px;background:#fff;border-radius:18px;padding:22px 20px;box-shadow:0 18px 50px rgba(15,23,42,.28);}
+.simple-modal-title{font-size:22px;font-weight:800;color:#111827;text-align:center;margin-bottom:10px;}
+.simple-modal-text{font-size:18px;font-weight:600;line-height:1.7;color:#1f2937;text-align:center;margin-bottom:14px;}
+.simple-modal-input-wrap{display:none;margin-bottom:12px;}
+.simple-modal-input-wrap.show{display:block;}
+.simple-modal-input{width:100%;box-sizing:border-box;padding:12px 14px;font-size:18px;font-weight:700;border-radius:12px;border:2px solid #9ca3af;color:#111827;}
+.simple-modal-input:focus{outline:none;border-color:#374151;box-shadow:0 0 0 3px rgba(55,65,81,.12);}
+.simple-modal-error{min-height:24px;font-size:16px;font-weight:700;color:#b91c1c;text-align:center;margin-bottom:6px;}
+.simple-modal-actions{display:flex;gap:12px;justify-content:center;margin-top:6px;}
+.simple-modal-actions button{width:auto;min-width:118px;padding:11px 18px;font-size:17px;font-weight:700;border-radius:12px;border:none;}
+.simple-modal-cancel{background:#6b7280;color:#fff;}
+.simple-modal-ok{background:#b91c1c;color:#fff;}
+@media (max-width:768px){.wrap{padding:14px 12px 20px;}.card{padding:16px;margin-bottom:14px;border-radius:14px;}.grid{grid-template-columns:1fr;}h2{font-size:22px;}.switch-row{gap:8px;}.switch-row a{flex:1 1 160px;}input,select,textarea,button{padding:10px;font-size:16px;border-radius:8px;}.upload-choice-file{padding:10px;font-size:16px;border-radius:8px;}.upload-dialog-card{border-radius:14px;padding:16px;width:min(320px,calc(100vw - 20px));}.simple-modal{padding:16px;}.simple-modal-card{border-radius:16px;padding:18px 16px;}.simple-modal-title{font-size:20px;}.simple-modal-text{font-size:16px;}.simple-modal-input{padding:10px 12px;font-size:16px;border-radius:8px;}.simple-modal-actions button{min-width:108px;padding:10px 16px;font-size:16px;border-radius:10px;}}
+
+.asset-search-table th:nth-child(2),.asset-search-table td:nth-child(2),
+.asset-search-table th:nth-child(3),.asset-search-table td:nth-child(3),
+.asset-search-table th:nth-child(5),.asset-search-table td:nth-child(5),
+.asset-location-table th:nth-child(1),.asset-location-table td:nth-child(1),
+.asset-location-table th:nth-child(2),.asset-location-table td:nth-child(2),
+.asset-accessory-table th:nth-child(1),.asset-accessory-table td:nth-child(1),
+.asset-accessory-table th:nth-child(2),.asset-accessory-table td:nth-child(2){white-space:nowrap;}
+.asset-search-table th:nth-child(2),.asset-search-table td:nth-child(2),
+.asset-search-table th:nth-child(3),.asset-search-table td:nth-child(3){width:16%;}
+.asset-search-table th:nth-child(4),.asset-search-table td:nth-child(4){width:23.25%;}
+.asset-search-table th:nth-child(5),.asset-search-table td:nth-child(5){width:12.75%;min-width:109px;}
+@media (max-width:768px){
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+.table-wrap table{width:max-content;table-layout:auto !important;}
+.asset-search-table{min-width:1220px !important;}
+.asset-location-table{min-width:1120px !important;}
+.asset-accessory-table{min-width:980px !important;}
+.asset-search-table th:nth-child(2),.asset-search-table td:nth-child(2),
+.asset-search-table th:nth-child(3),.asset-search-table td:nth-child(3){width:auto !important;min-width:192px;white-space:nowrap !important;overflow:visible !important;text-overflow:clip !important;}
+.asset-search-table th:nth-child(4),.asset-search-table td:nth-child(4){width:auto !important;min-width:250px;}
+.asset-search-table th:nth-child(5),.asset-search-table td:nth-child(5){width:auto !important;min-width:141px;white-space:nowrap !important;overflow:visible !important;text-overflow:clip !important;}
+.asset-location-table th:nth-child(1),.asset-location-table td:nth-child(1),
+.asset-location-table th:nth-child(2),.asset-location-table td:nth-child(2),
+.asset-accessory-table th:nth-child(1),.asset-accessory-table td:nth-child(1),
+.asset-accessory-table th:nth-child(2),.asset-accessory-table td:nth-child(2){width:auto !important;min-width:220px;white-space:nowrap !important;overflow:visible !important;text-overflow:clip !important;}
+.table-wrap table .num-link{display:inline-block;white-space:nowrap !important;overflow:visible !important;text-overflow:clip !important;max-width:none !important;word-break:normal !important;}
+}
+</style>
+<script>
+function openScanDialog(targetField){
+    var input = document.querySelector('[name="'+targetField+'"]');
+// 标签扫描弹窗 - 完整相机OCR
+var scanStream = null;
+function openScanDialog(targetField){
+    var input = document.querySelector('[name="'+targetField+'"]');
+    if(!input){ return; }
+    var dialog = document.getElementById('scan-dialog');
+    if(!dialog){ return; }
+    dialog.dataset.target = targetField;
+    dialog.classList.add('show');
+    startInlineCamera();
+}
+function closeScanDialog(){
+    stopInlineCamera();
+    var dialog = document.getElementById('scan-dialog');
+    if(dialog){ dialog.classList.remove('show'); }
+}
+function startInlineCamera(){
+    stopInlineCamera();
+    var statusEl = document.getElementById('scan-dialog-status');
+    if(statusEl){ statusEl.textContent = '打开相机中...'; statusEl.style.color = '#666'; }
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+        if(statusEl){ statusEl.textContent = '当前浏览器不支持相机'; statusEl.style.color = '#dc2626'; }
+        return;
+    }
+    navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:640},height:{ideal:480}},audio:false})
+    .then(function(stream){
+        scanStream = stream;
+        var video = document.getElementById('scan-video-inline');
+        if(video){ video.srcObject = stream; video.play(); }
+        if(statusEl){ statusEl.textContent = '请将标签对准扫描框，点击识别'; statusEl.style.color = '#15803d'; }
+    })
+    .catch(function(err){
+        if(statusEl){ statusEl.textContent = '无法打开相机：' + (err.message || '权限被拒'); statusEl.style.color = '#dc2626'; }
+    });
+}
+function stopInlineCamera(){
+    if(scanStream){
+        try{ scanStream.getTracks().forEach(function(t){ t.stop(); }); }catch(e){}
+        scanStream = null;
+    }
+    var video = document.getElementById('scan-video-inline');
+    if(video){ video.pause(); video.srcObject = null; }
+}
+function scanInline(){
+    var statusEl = document.getElementById('scan-dialog-status');
+    var video = document.getElementById('scan-video-inline');
+    if(!video || !video.videoWidth || !video.videoHeight){
+        if(statusEl){ statusEl.textContent = '相机尚未就绪'; statusEl.style.color = '#dc2626'; }
+        return;
+    }
+    if(statusEl){ statusEl.textContent = '识别中...'; statusEl.style.color = '#15803d'; }
+    var canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    var ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0);
+    canvas.toBlob(function(blob){
+        if(!blob){ if(statusEl){ statusEl.textContent = '截图失败'; statusEl.style.color = '#dc2626'; } return; }
+        var dialog = document.getElementById('scan-dialog');
+        var targetField = dialog ? dialog.dataset.target : '';
+        var formData = new FormData();
+        formData.append('scan_image', blob, 'scan.jpg');
+        formData.append('target', targetField);
+        fetch('/scan_label_image_action', {method:'POST', body:formData, cache:'no-store'})
+        .then(function(r){ return r.json(); })
+        .then(function(data){
+            if(data && data.ok && data.code){
+                var input = document.querySelector('[name="'+targetField+'"]');
+                if(input){ input.value = data.code; }
+                closeScanDialog();
+            }else{
+                if(statusEl){ statusEl.textContent = (data && data.message) ? data.message : '识别失败'; statusEl.style.color = '#dc2626'; }
+            }
+        })
+        .catch(function(){ if(statusEl){ statusEl.textContent = '识别请求失败'; statusEl.style.color = '#dc2626'; } });
+    }, 'image/jpeg', 0.9);
+}
+let activeImageInputId = '';
+
+function validateAssetGroupNoValue(value){
+    value = (value || '').trim();
+    if(!value){
+        return '';
+    }
+    return /^\\d{18}$/.test(value) ? '' : '集团编号必须为18位数字';
+}
+
+function validateAccessoryGroupNoValue(value, internalNo){
+    value = (value || '').trim();
+    if(!value){
+        return '';
+    }
+    internalNo = (internalNo || '').trim();
+    if(internalNo && internalNo.includes('-')){
+        return '';
+    }
+    return /^\\d{18}-\\d+$/.test(value) ? '' : '附属资产集团编号必须为18位主编号-序号';
+}
+
+function confirmDeviceSave(form){
+    const deviceType = (form.querySelector('[name="device_type"]') || {}).value || '主设备';
+    const statusEl = form.querySelector('[name="status"]');
+    const isUnboxing = statusEl && statusEl.value === '开箱';
+    if(isUnboxing && deviceType === '主设备'){
+        const groupNo = ((form.querySelector('[name="group_no"]') || {}).value || '').trim();
+        if(groupNo){ const msg = validateAssetGroupNoValue(groupNo); if(msg){ alert(msg); return false; } }
+        return confirm('确认保存吗？');
+    }
+    const groupNo = ((form.querySelector('[name="group_no"]') || {}).value || '').trim();
+    const internalNo = ((form.querySelector('[name="internal_no"]') || {}).value || '').trim();
+    if(groupNo){
+        const msg = deviceType === '配件' ? validateAccessoryGroupNoValue(groupNo, internalNo) : validateAssetGroupNoValue(groupNo);
+        if(msg){ alert(msg); return false; }
+    }
+    return confirm('确认保存吗？');
+}
+
+function openUploadChooser(dialogId, triggerEl){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.add('show'); } }
+function closeUploadChooser(dialogId){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.remove('show'); } }
+const uploadSelectionState = window.uploadSelectionState || (window.uploadSelectionState = {});
+function getUploadInputIds(textEl, fallbackInputId){ return (textEl.dataset.inputs || fallbackInputId || '').split(',').map(item => item.trim()).filter(Boolean); }
+function makeShortUploadName(file){
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const ms = String(now.getMilliseconds()).padStart(3, '0');
+    const timePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${ms}`;
+    const originalName = file && file.name ? file.name : '';
+    const extMatch = originalName.match(/[.]([A-Za-z0-9]+)$/);
+    const ext = extMatch ? extMatch[1].toLowerCase() : 'jpg';
+    return `${timePart}.${ext}`;
+}
+function cloneUploadFileWithShortName(file){
+    if(!file){ return file; }
+    try{
+        if(file.__shortUploadName){ return file; }
+        const newFile = new File([file], makeShortUploadName(file), { type: file.type || 'image/jpeg', lastModified: file.lastModified || Date.now() });
+        Object.defineProperty(newFile, '__shortUploadName', { value: true });
+        return newFile;
+    }catch(e){
+        return file;
+    }
+}
+function syncUploadInputs(textId, activeInputId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || { files: [] };
+    const inputIds = getUploadInputIds(textEl, activeInputId);
+    if(typeof DataTransfer !== 'undefined'){
+        const transfer = new DataTransfer();
+        state.files.forEach(file => transfer.items.add(file));
+        const activeInput = document.getElementById(activeInputId);
+        if(activeInput){ try{ activeInput.files = transfer.files; }catch(e){} }
+        const fileListInputs = document.querySelectorAll('input[type="file"][name="image_files"]');
+        fileListInputs.forEach(inp => {
+            if(inp !== activeInput){ try{ inp.files = new DataTransfer().files; }catch(e){} }
+        });
+    }
+}
+function renderUploadSelection(textId, activeInputId){
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || { files: [] };
+    if(state.files.length <= 0){
+        textEl.textContent = '选择图片';
+        syncUploadInputs(textId, activeInputId);
+        return;
+    }
+    textEl.innerHTML = '';
+    const summary = document.createElement('div');
+    summary.textContent = `已选 ${state.files.length} 张（最多5张）`;
+    textEl.appendChild(summary);
+    const list = document.createElement('div');
+    list.className = 'upload-preview-list';
+    state.files.forEach((file, index) => {
+        const item = document.createElement('div');
+        item.className = 'upload-preview-item';
+        const name = document.createElement('span');
+        name.className = 'upload-preview-name';
+        name.textContent = file.name || `图片${index + 1}`;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'upload-remove-btn';
+        remove.setAttribute('aria-label', '删除该图片');
+        remove.textContent = '×';
+        remove.onclick = function(){ removeSelectedUploadFile(textId, index, activeInputId); };
+        item.appendChild(name);
+        item.appendChild(remove);
+        list.appendChild(item);
+    });
+    textEl.appendChild(list);
+    syncUploadInputs(textId, activeInputId);
+}
+function removeSelectedUploadFile(textId, index, activeInputId){
+    const state = uploadSelectionState[textId];
+    if(!state){ return; }
+    state.files.splice(index, 1);
+    renderUploadSelection(textId, activeInputId);
+}
+function updateSelectedFiles(inputId, textId, dialogId){
+    const input = document.getElementById(inputId);
+    const textEl = document.getElementById(textId);
+    if(!textEl){ return; }
+    const state = uploadSelectionState[textId] || (uploadSelectionState[textId] = { files: [] });
+    const incoming = input && input.files ? Array.from(input.files).map(cloneUploadFileWithShortName) : [];
+    incoming.forEach(file => {
+        if(state.files.length < 5){ state.files.push(file); }
+    });
+    if(input){ try{ input.value = ''; }catch(e){} }
+    renderUploadSelection(textId, inputId);
+    if(dialogId){ closeUploadChooser(dialogId); }
+    if(incoming.length > 0 && state.files.length >= 5){
+        const summary = textEl.querySelector('div');
+        if(summary){ summary.textContent = `已选择 ${state.files.length} 张（已达本次最多5张）`; }
+    }
+}
+
+</script>
+</head>
+<body>
+<div class="wrap">
+    <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+            <h2 style="margin:0;">新增设备</h2>
+            <a href="/"><button type="button" class="btn-return-secondary" style="width:auto;min-width:108px;">返回</button></a>
+        </div>
+        <div style="color:#666;margin-bottom:10px;">内部编号和集团编号至少填写一个。选择"开箱"状态时，集团编号和内部编号均可空，内部编号留空将自动填入12位时间戳。</div>
+        {% if error %}<div class="err">{{ error }}</div>{% endif %}
+        <form method="post" enctype="multipart/form-data" onsubmit="return confirmDeviceSave(this);">
+            <input type="hidden" name="parent_asset_id" value="{{ form_data.parent_asset_id }}">
+            <div class="grid">
+                <div class="row">
+                    <label>类型</label>
+                    <select name="device_type" id="device_type">
+                        <option value="主设备" {% if form_data.device_type == '主设备' %}selected{% endif %}>主设备</option>
+                        <option value="配件" {% if form_data.device_type == '配件' %}selected{% endif %}>配件</option>
+                    </select>
+                </div>
+                <div class="row"><label>集团编号（可空）</label><input type="text" name="group_no" value="{{ form_data.group_no }}"></div>
+                <div class="row"><label>内部编号（可空）</label><input type="text" name="internal_no" value="{{ form_data.internal_no }}"></div>
+                <div class="row"><label>名称</label><input type="text" name="name" value="{{ form_data.name }}"></div>
+                <div class="row"><label>型号</label><input type="text" name="model" value="{{ form_data.model }}"></div>
+                <div class="row"><label>责任人</label><input type="text" name="owner" value="{{ form_data.owner }}"></div>
+                <div class="row"><label>位置</label><input type="text" name="location" value="{{ form_data.location }}"></div>
+                <div class="row"><label>时间</label><input type="date" value="{{ form_data.asset_date }}" disabled class="readonly"></div>
+                <div class="row">
+                    <label>状态</label>
+                    <select name="status">
+                        <option value="">请选择</option>
+                        {% for s in statuses %}
+                        <option value="{{ s.dict_value }}" {% if form_data.status == s.dict_value %}selected{% endif %}>{{ s.dict_value }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="row">
+                    <label>上传图片（最多5张）</label>
+                    <div class="upload-actions">
+                        <button type="button" class="btn-upload-primary" onclick='openUploadChooser("device-upload-choice-dialog", this)'>上传图片</button>
+                    </div>
+                    <div id="device-image-files-text" class="file-list" data-inputs="device-camera-files,device-file-files">未选择图片</div>
+                    <div style="display:none;">
+                        <input type="file" id="device-camera-files" name="image_files" accept="image/*" capture="environment" multiple onchange="updateSelectedFiles('device-camera-files', 'device-image-files-text', 'device-upload-choice-dialog')">
+                        <input type="file" id="device-file-files" name="image_files" accept="image/*" multiple onchange="updateSelectedFiles('device-file-files', 'device-image-files-text', 'device-upload-choice-dialog')">
+                    </div>
+                </div>
+            </div>
+            <div class="row"><label>备注</label><textarea name="remark">{{ form_data.remark }}</textarea></div>
+            <div style="margin-top:12px;"><button type="submit" class="btn-save-primary">保存</button></div>
+        </form>
+    </div>
+</div>
+<div id="device-upload-choice-dialog" class="upload-dialog" onclick="if(event.target === this){closeUploadChooser('device-upload-choice-dialog');}">
+    <div class="upload-dialog-card">
+        <div class="upload-dialog-title">请选择上传方式</div>
+        <div class="upload-dialog-actions">
+            <label class="upload-choice-file upload-choice-camera" onclick="document.getElementById('device-camera-files').click();">拍照</label>
+            <label class="upload-choice-file upload-choice-local" onclick="document.getElementById('device-file-files').click();">本地上传</label>
+            <button type="button" class="btn-cancel" onclick="closeUploadChooser('device-upload-choice-dialog')">取消</button>
+        </div>
+    </div>
+</div>
+<!-- 标签扫描弹窗 -->
+<div id="scan-dialog" class="upload-dialog" onclick="if(event.target===this){closeScanDialog();}">
+    <div class="upload-dialog-card" style="max-width:400px;">
+        <div class="upload-dialog-title">标签识别</div>
+        <div style="position:relative;width:100%;aspect-ratio:1/2;max-height:42vh;background:#0f172a;border-radius:12px;overflow:hidden;margin-bottom:8px;">
+            <video id="scan-video-inline" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;"></video>
+            <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(60vw,320px);height:min(10vw,40px);border:2px solid rgba(255,255,255,.9);border-radius:12px;box-shadow:0 0 0 9999px rgba(15,23,42,.35);pointer-events:none;"></div>
+        </div>
+        <div id="scan-dialog-status" style="min-height:24px;font-size:15px;font-weight:700;text-align:center;margin-bottom:6px;color:#666;"></div>
+        <div class="upload-dialog-actions">
+            <button type="button" class="btn-upload-primary" onclick="scanInline()" style="width:100%;">识别</button>
+            <button type="button" class="btn-cancel" onclick="closeScanDialog()" style="width:100%;">取消</button>
+        </div>
+    </div>
+</div>
+</body>

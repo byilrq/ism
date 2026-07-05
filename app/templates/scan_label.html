@@ -1,0 +1,382 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>条形码扫描</title>
+<style>
+:root{--bg:#edf3ff;--card:rgba(255,255,255,.92);--line:#d8e2f0;--text:#18324a;--muted:#66788a;--primary:#2f6df3;--primary-deep:#1d4ed8;--green:#1f9d68;--gray:#6c7a89;--danger:#c62828;}
+*{box-sizing:border-box;}
+body{font-family:Arial,sans-serif;margin:0;color:var(--text);background:linear-gradient(180deg,#eef4ff 0%,#f8fbff 35%,#f3f7fb 100%);}
+.wrap{max-width:920px;margin:auto;padding:8px 8px 10px;min-height:100vh;}
+.card{background:var(--card);border:1px solid rgba(216,226,240,.95);border-radius:16px;padding:10px 10px 8px;margin-bottom:8px;box-shadow:0 10px 28px rgba(37,99,235,.08);backdrop-filter:blur(8px);}
+.toolbar{display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:8px;}
+.torch-btn{width:46px;min-width:46px;height:44px;padding:0;border-radius:12px;font-size:22px;line-height:1;background:linear-gradient(135deg,#7b8794 0%,#5f6b77 100%);box-shadow:0 6px 14px rgba(46,58,74,.16);}
+.torch-btn.on{background:linear-gradient(135deg,#ffe082 0%,#ffca28 100%);color:#4b3b00;box-shadow:0 8px 18px rgba(255,202,40,.36);}
+.video-wrap{position:relative;width:100%;aspect-ratio:3/4;max-height:62vh;background:#0f172a;border-radius:16px;overflow:hidden;border:1px solid #cfe0f2;box-shadow:inset 0 1px 0 rgba(255,255,255,.18);}
+video{width:100%;height:100%;object-fit:cover;background:#0f172a;}
+.scan-mask{position:absolute;inset:0;pointer-events:none;display:flex;align-items:center;justify-content:center;}
+.scan-box{width:min(78vw,420px);height:min(26vw,150px);border:3px solid rgba(255,255,255,.96);border-radius:18px;box-shadow:0 0 0 9999px rgba(15,23,42,.28);position:relative;}
+.scan-box:before{content:"";position:absolute;left:10px;right:10px;height:2px;background:rgba(96,165,250,.95);box-shadow:0 0 16px rgba(96,165,250,.95);animation:scanline 2.2s linear infinite;top:16px;}
+@keyframes scanline{0%{top:16px;}50%{top:calc(100% - 18px);}100%{top:16px;}}
+.status-box{display:none;margin-top:8px;padding:8px 10px;border-radius:12px;font-size:13px;line-height:1.5;}
+.status-box.show{display:block;}
+.status-box.info{background:#eff3f7;border:1px solid #d5dde6;color:#415264;}
+.status-box.error{background:#fff1f0;border:1px solid #f5c2c0;color:#c62828;}
+.status-box.success{background:#eef8f3;border:1px solid #cfe4d9;color:#0f8a56;}
+.result-box{margin-top:8px;padding:8px 10px;border:1px solid #d7dee7;border-radius:12px;background:linear-gradient(180deg,#fcfcfd 0%,#f3f5f8 100%);font-size:18px;font-weight:800;letter-spacing:1px;word-break:break-all;box-shadow:inset 0 1px 0 rgba(255,255,255,.7);min-height:46px;display:flex;align-items:center;justify-content:center;text-align:center;}
+.result-box.empty{color:#91a0b2;font-size:14px;font-weight:600;letter-spacing:0;}
+.action-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:center;margin-top:8px;}
+.action-row button,.action-row a button{width:auto;min-width:110px;}
+button{padding:10px 16px;font-size:16px;border-radius:12px;border:none;cursor:pointer;font-weight:700;color:#fff;background:linear-gradient(135deg,var(--primary) 0%,var(--primary-deep) 100%);box-shadow:0 6px 14px rgba(37,99,235,.16);}
+button:hover{transform:translateY(-1px);box-shadow:0 12px 22px rgba(46,58,74,.16);}
+.btn-gray{background:linear-gradient(135deg,#8b95a1 0%,#697380 100%);}.btn-return-secondary{background:linear-gradient(135deg,#8f2d4b 0%,#6f1d36 100%);box-shadow:0 10px 18px rgba(111,29,54,.20);}.btn-return-secondary:hover{background:linear-gradient(135deg,#9d3656 0%,#7c2140 100%);box-shadow:0 12px 22px rgba(111,29,54,.24);}
+.btn-green{background:linear-gradient(135deg,#4f8d78 0%,#2f6b58 100%);}
+.mode-btn{min-width:120px;}
+.summary-badge{display:inline-flex;align-items:center;padding:8px 12px;border-radius:999px;background:#eef2f6;color:#4a5767;font-weight:700;border:1px solid #d4dbe4;font-size:14px;}
+@media (max-width:768px){.wrap{padding:8px 8px 10px;}.card{padding:10px 10px 8px;margin-bottom:8px;border-radius:14px;}.video-wrap{aspect-ratio:3/4;max-height:60vh;border-radius:14px;}.scan-box{width:min(82vw,340px);height:min(28vw,120px);border-radius:14px;}.result-box{padding:8px 10px;border-radius:10px;font-size:18px;min-height:46px;}.result-box.empty{font-size:14px;}.action-row{margin-top:8px;gap:8px;}.action-row button,.action-row a button{min-width:102px;}.status-box{margin-top:8px;padding:8px 10px;font-size:13px;}.scan-box:before{left:8px;right:8px;}.summary-badge{padding:7px 10px;font-size:13px;}}
+</style>
+<script>
+const assignLocation = {{ assign_location|default('', true)|tojson|safe }};
+const backUrl = {{ back_url|default(url_for('search_assets'), true)|tojson|safe }};
+let scanStream = null;
+let barcodeDetector = null;
+let scanTimer = null;
+let scanning = false;
+let processingCode = false;
+let lastDetectedCode = '';
+let scanMode = 'search';
+let inventoryScannedCodes = new Set();
+let inventoryCount = 0;
+let torchEnabled = false;
+
+function setStatus(message, variant){
+    const el = document.getElementById('scan-status');
+    if(!el){ return; }
+    if(!message){
+        el.textContent = '';
+        el.className = 'status-box';
+        return;
+    }
+    el.textContent = message;
+    el.className = 'status-box show ' + (variant || 'info');
+}
+
+function setResult(code){
+    const el = document.getElementById('scan-result');
+    if(!el){ return; }
+    if(!code){
+        el.textContent = '等待识别条形码';
+        el.className = 'result-box empty';
+        return;
+    }
+    el.textContent = code;
+    el.className = 'result-box';
+}
+
+function updateModeButton(){
+    const btn = document.getElementById('scan-mode-btn');
+    if(!btn){ return; }
+    btn.textContent = scanMode === 'inventory' ? '盘点' : '检索';
+}
+
+function updateInventoryCount(){
+    const el = document.getElementById('inventory-count');
+    if(!el){ return; }
+    el.textContent = '已盘点 ' + String(inventoryCount);
+}
+
+function updateTorchButton(){
+    const btn = document.getElementById('torch-btn');
+    if(!btn){ return; }
+    btn.classList.toggle('on', !!torchEnabled);
+    btn.setAttribute('aria-pressed', torchEnabled ? 'true' : 'false');
+    btn.title = torchEnabled ? '关闭手电筒' : '打开手电筒';
+}
+
+function getTorchTrack(){
+    if(!scanStream){ return null; }
+    const tracks = scanStream.getVideoTracks ? scanStream.getVideoTracks() : [];
+    return tracks && tracks.length ? tracks[0] : null;
+}
+
+async function setTorchState(nextState){
+    const track = getTorchTrack();
+    if(!track){
+        setStatus('相机未启动，无法切换手电筒。', 'error');
+        return false;
+    }
+    const capabilities = typeof track.getCapabilities === 'function' ? track.getCapabilities() : {};
+    if(!capabilities || !capabilities.torch){
+        setStatus('当前设备或浏览器不支持手电筒。', 'info');
+        return false;
+    }
+    try{
+        await track.applyConstraints({advanced:[{torch: !!nextState}]});
+        torchEnabled = !!nextState;
+        updateTorchButton();
+        return true;
+    }catch(err){
+        setStatus('手电筒切换失败：' + (err && err.message ? err.message : '未知错误'), 'error');
+        return false;
+    }
+}
+
+async function toggleTorch(){
+    await setTorchState(!torchEnabled);
+    return false;
+}
+
+function updateTorchButton(){
+    const btn = document.getElementById('torch-btn');
+    if(!btn){ return; }
+    btn.classList.toggle('on', !!torchEnabled);
+    btn.setAttribute('aria-pressed', torchEnabled ? 'true' : 'false');
+    btn.title = torchEnabled ? '关闭手电筒' : '打开手电筒';
+}
+
+function getTorchTrack(){
+    if(!scanStream){ return null; }
+    const tracks = scanStream.getVideoTracks ? scanStream.getVideoTracks() : [];
+    return tracks && tracks.length ? tracks[0] : null;
+}
+
+async function setTorchState(nextState){
+    const track = getTorchTrack();
+    if(!track){
+        setStatus('相机未启动，无法切换手电筒。', 'error');
+        return false;
+    }
+    const capabilities = typeof track.getCapabilities === 'function' ? track.getCapabilities() : {};
+    if(!capabilities || !capabilities.torch){
+        setStatus('当前设备或浏览器不支持手电筒。', 'info');
+        return false;
+    }
+    try{
+        await track.applyConstraints({advanced:[{torch: !!nextState}]});
+        torchEnabled = !!nextState;
+        updateTorchButton();
+        return true;
+    }catch(err){
+        setStatus('手电筒切换失败：' + (err && err.message ? err.message : '未知错误'), 'error');
+        return false;
+    }
+}
+
+async function toggleTorch(){
+    await setTorchState(!torchEnabled);
+    return false;
+}
+
+function toggleScanMode(){
+    scanMode = scanMode === 'search' ? 'inventory' : 'search';
+    updateModeButton();
+    updateInventoryCount();
+    setStatus(scanMode === 'inventory' ? '已切换到盘点模式' : '已切换到检索模式', 'info');
+    setResult('');
+    lastDetectedCode = '';
+    processingCode = false;
+}
+
+function normalizeCode(value){
+    return String(value || '').trim().replace(/\s+/g, '');
+}
+
+function stopScan(){
+    scanning = false;
+    processingCode = false;
+    if(scanTimer){
+        window.clearTimeout(scanTimer);
+        scanTimer = null;
+    }
+    const video = document.getElementById('scan-video');
+    if(video){
+        try{ video.pause(); }catch(e){}
+        video.srcObject = null;
+    }
+    if(scanStream){
+        try{
+            const track = getTorchTrack();
+            if(track && torchEnabled){
+                try{ track.applyConstraints({advanced:[{torch:false}]}); }catch(e){}
+            }
+            scanStream.getTracks().forEach(track => track.stop());
+        }catch(e){}
+        scanStream = null;
+    }
+    torchEnabled = false;
+    updateTorchButton();
+}
+
+async function ensureDetector(){
+    if(!('BarcodeDetector' in window)){
+        setStatus('当前浏览器不支持原生条形码扫描，请使用支持 BarcodeDetector 的浏览器。', 'error');
+        return false;
+    }
+    const supported = await BarcodeDetector.getSupportedFormats();
+    const formats = ['code_39', 'code_128'].filter(item => supported.includes(item));
+    if(!formats.length){
+        setStatus('当前浏览器不支持 Code39 / Code128 条形码识别。', 'error');
+        return false;
+    }
+    barcodeDetector = new BarcodeDetector({formats: formats});
+    return true;
+}
+
+async function startScan(){
+    stopScan();
+    setResult('');
+    setStatus('', 'info');
+    const ready = await ensureDetector();
+    if(!ready){ return; }
+    try{
+        scanStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});
+    }catch(err){
+        setStatus('无法打开相机，请检查相机权限。' + (err && err.message ? ' ' + err.message : ''), 'error');
+        return;
+    }
+    const video = document.getElementById('scan-video');
+    if(!video){
+        setStatus('视频组件初始化失败。', 'error');
+        stopScan();
+        return;
+    }
+    video.srcObject = scanStream;
+    try{
+        await video.play();
+    }catch(err){
+        setStatus('相机启动失败。' + (err && err.message ? ' ' + err.message : ''), 'error');
+        stopScan();
+        return;
+    }
+    torchEnabled = false;
+    updateTorchButton();
+    scanning = true;
+    processingCode = false;
+    lastDetectedCode = '';
+    scanLoop();
+}
+
+async function handleDetectedCode(rawValue){
+    if(scanMode === 'inventory' && inventoryScannedCodes.has(rawValue)){
+        setResult(rawValue);
+        setStatus('该设备已重复盘点', 'info');
+        processingCode = true;
+        window.setTimeout(function(){
+            processingCode = false;
+            lastDetectedCode = '';
+            if(scanning){ scanLoop(); }
+        }, 700);
+        return;
+    }
+    processingCode = true;
+    setResult(rawValue);
+    setStatus(scanMode === 'inventory' ? '识别成功，正在盘点...' : '识别成功，正在检索...', 'success');
+    try{
+        const response = await fetch('/scan_label_action?mode=' + encodeURIComponent(scanMode) + '&code=' + encodeURIComponent(rawValue), {cache:'no-store'});
+        const data = await response.json();
+        if(!response.ok || !data || !data.ok){
+            setStatus((data && data.message) ? data.message : '识别处理失败', 'error');
+            processingCode = false;
+            lastDetectedCode = '';
+            if(scanning){ scanLoop(); }
+            return;
+        }
+        if(data.message){
+            setStatus(data.message, data.action === 'updated' ? 'success' : 'info');
+        }
+        if(data.action === 'redirect' && data.redirect_url){
+            stopScan();
+            window.setTimeout(function(){ window.location.assign(data.redirect_url); }, 180);
+            return;
+        }
+        if(data.action === 'updated'){
+            if(scanMode === 'inventory' && !inventoryScannedCodes.has(rawValue)){
+                inventoryScannedCodes.add(rawValue);
+                inventoryCount += 1;
+                updateInventoryCount();
+            }
+            window.setTimeout(function(){
+                processingCode = false;
+                lastDetectedCode = '';
+                setResult('');
+                setStatus('', 'info');
+                if(scanning){ scanLoop(); }
+            }, 700);
+            return;
+        }
+        processingCode = false;
+        lastDetectedCode = '';
+        if(scanning){ scanLoop(); }
+    }catch(err){
+        setStatus('处理失败：' + (err && err.message ? err.message : '未知错误'), 'error');
+        processingCode = false;
+        lastDetectedCode = '';
+        if(scanning){ scanLoop(); }
+    }
+}
+
+async function scanLoop(){
+    if(!scanning || !barcodeDetector || processingCode){ return; }
+    const video = document.getElementById('scan-video');
+    try{
+        const results = await barcodeDetector.detect(video);
+        if(results && results.length){
+            for(const item of results){
+                const rawValue = normalizeCode(item.rawValue || '');
+                const format = String(item.format || '').toLowerCase();
+                if(!rawValue){ continue; }
+                if(format && ['code_39','code_128'].indexOf(format) === -1){ continue; }
+                if(rawValue === lastDetectedCode){ continue; }
+                lastDetectedCode = rawValue;
+                handleDetectedCode(rawValue);
+                return;
+            }
+        }
+    }catch(err){
+        setStatus('条形码识别失败：' + (err && err.message ? err.message : '未知错误'), 'error');
+    }
+    scanTimer = window.setTimeout(scanLoop, 180);
+}
+
+function handleBack(){
+    stopScan();
+    window.location.assign(backUrl || '/');
+}
+
+window.addEventListener('beforeunload', stopScan);
+window.addEventListener('pagehide', stopScan);
+window.addEventListener('DOMContentLoaded', function(){
+    updateModeButton();
+    updateInventoryCount();
+    setResult('');
+    startScan();
+});
+</script>
+</head>
+<body>
+<div class="wrap">
+    <div class="card">
+        <div class="toolbar">
+            <button id="torch-btn" type="button" class="torch-btn" aria-pressed="false" title="打开手电筒" onclick="return toggleTorch();">💡</button>
+            {% if assign_location %}
+            <div class="summary-badge">货架：{{ assign_location }}</div>
+            {% else %}
+            <button id="scan-mode-btn" type="button" class="mode-btn" onclick="toggleScanMode(); return false;">检索</button>
+            <div id="inventory-count" class="summary-badge">已盘点 0</div>
+            {% endif %}
+        </div>
+        <div class="video-wrap">
+            <video id="scan-video" autoplay playsinline muted></video>
+            <div class="scan-mask"><div class="scan-box"></div></div>
+        </div>
+        <div id="scan-status" class="status-box"></div>
+        <div id="scan-result" class="result-box empty">等待识别条形码</div>
+        <div class="action-row">
+            <button type="button" class="btn-green" onclick="startScan(); return false;">重新扫描</button>
+            <button type="button" class="btn-return-secondary" onclick="handleBack(); return false;">返回</button>
+        </div>
+    </div>
+</div>
+</body>
+</html>
