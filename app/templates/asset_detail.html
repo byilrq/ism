@@ -50,7 +50,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .upload-actions button{width:auto;min-width:120px;}
 .file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
 .upload-preview-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}.upload-preview-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #e1e7ef;border-radius:10px;background:#fbfdff;color:#4d5b6b;}.upload-preview-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.upload-remove-btn{width:28px;min-width:28px;height:28px;padding:0;border-radius:999px;background:#dc2626;color:#fff;border:none;box-shadow:none;font-weight:900;line-height:1;display:inline-flex;align-items:center;justify-content:center;}
-.upload-dialog{position:fixed;inset:0;background:rgba(15,23,42,.52);display:none;align-items:center;justify-content:center;z-index:10000;padding:18px;} .upload-dialog.show{display:flex;} .upload-dialog-card{width:100%;max-width:320px;background:#fff;border-radius:18px;padding:22px 20px;box-shadow:0 18px 50px rgba(15,23,42,.28);}
+.upload-dialog{position:fixed;inset:0;background:rgba(15,23,42,.52);display:none;align-items:center;justify-content:center;z-index:10000;padding:18px;} .upload-dialog.show{display:flex;} .upload-dialog-card{width:100%;max-width:600px;background:#fff;border-radius:18px;padding:22px 20px;box-shadow:0 18px 50px rgba(15,23,42,.28);}
 .upload-dialog-title{font-size:18px;font-weight:bold;margin-bottom:12px;text-align:center;color:#163047;}
 .upload-dialog-actions{display:flex;flex-direction:column;gap:10px;}
 .upload-dialog-actions button{width:100%;}
@@ -83,7 +83,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .simple-modal-actions button{width:auto;min-width:118px;padding:11px 18px;font-size:17px;font-weight:700;border-radius:12px;border:none;}
 .simple-modal-cancel{background:#6b7280;color:#fff;}
 .simple-modal-ok{background:#b91c1c;color:#fff;}
-@media (max-width:768px){.wrap{padding:14px 12px 20px;}.card{padding:16px;margin-bottom:14px;border-radius:14px;}.grid{grid-template-columns:1fr;gap:10px;}.row{margin-bottom:6px;}label{margin-bottom:4px;font-size:16px;}.image-row{margin-bottom:10px;padding:10px 12px;}.title-row{align-items:flex-start;gap:10px;margin-bottom:12px;flex-direction:column;}.title-actions{width:100% !important;margin-left:0;display:flex !important;justify-content:space-between;gap:14px;flex-wrap:nowrap;}.title-actions > *{width:auto !important;max-width:none;flex:0 0 auto;}.title-actions a{width:auto !important;}.title-actions button{min-width:104px !important;width:auto !important;max-width:none;padding:10px 14px !important;font-size:16px;}.detail-actions{gap:14px;margin-top:12px;justify-content:space-between;flex-wrap:nowrap;}.detail-actions button{min-width:104px;width:auto;max-width:none;padding:10px 14px;font-size:16px;}.switch-row{gap:8px;}.switch-row a{flex:1 1 160px;}h2{font-size:22px;}.muted{font-size:14px;line-height:1.6;}.file-list{margin-top:8px;font-size:14px;line-height:1.6;}input,select,textarea,button{padding:10px 12px;font-size:16px;border-radius:8px;}.upload-choice-file{padding:10px;font-size:16px;border-radius:8px;}.upload-dialog-card{border-radius:14px;padding:16px;width:min(320px,calc(100vw - 20px));}.simple-modal{padding:16px;}.simple-modal-card{border-radius:16px;padding:18px 16px;}.simple-modal-title{font-size:20px;}.simple-modal-text{font-size:16px;}.simple-modal-input{padding:10px 12px;font-size:16px;border-radius:8px;}.simple-modal-actions button{min-width:108px;padding:10px 16px;font-size:16px;border-radius:10px;}}
+@media (max-width:768px){.wrap{padding:14px 12px 20px;}.card{padding:16px;margin-bottom:14px;border-radius:14px;}.grid{grid-template-columns:1fr;gap:10px;}.row{margin-bottom:6px;}label{margin-bottom:4px;font-size:16px;}.image-row{margin-bottom:10px;padding:10px 12px;}.title-row{align-items:flex-start;gap:10px;margin-bottom:12px;flex-direction:column;}.title-actions{width:100% !important;margin-left:0;display:flex !important;justify-content:space-between;gap:14px;flex-wrap:nowrap;}.title-actions > *{width:auto !important;max-width:none;flex:0 0 auto;}.title-actions a{width:auto !important;}.title-actions button{min-width:104px !important;width:auto !important;max-width:none;padding:10px 14px !important;font-size:16px;}.detail-actions{gap:14px;margin-top:12px;justify-content:space-between;flex-wrap:nowrap;}.detail-actions button{min-width:104px;width:auto;max-width:none;padding:10px 14px;font-size:16px;}.switch-row{gap:8px;}.switch-row a{flex:1 1 160px;}h2{font-size:22px;}.muted{font-size:14px;line-height:1.6;}.file-list{margin-top:8px;font-size:14px;line-height:1.6;}input,select,textarea,button{padding:10px 12px;font-size:16px;border-radius:8px;}.upload-choice-file{padding:10px;font-size:16px;border-radius:8px;}.upload-dialog-card{border-radius:14px;padding:16px;width:min(600px,calc(100vw - 20px));}.simple-modal{padding:16px;}.simple-modal-card{border-radius:16px;padding:18px 16px;}.simple-modal-title{font-size:20px;}.simple-modal-text{font-size:16px;}.simple-modal-input{padding:10px 12px;font-size:16px;border-radius:8px;}.simple-modal-actions button{min-width:108px;padding:10px 16px;font-size:16px;border-radius:10px;}}
 
 .asset-search-table th:nth-child(2),.asset-search-table td:nth-child(2),
 .asset-search-table th:nth-child(3),.asset-search-table td:nth-child(3),
@@ -139,6 +139,24 @@ function confirmAssetSaveModal(formId){
 }
 function beginEdit(formId, buttonId){ const form = document.getElementById(formId); if(!form){ return false; } const fields = form.querySelectorAll('.edit-field'); fields.forEach(el => { el.disabled = false; el.classList.remove('readonly'); }); const button = document.getElementById(buttonId); if(button){ button.textContent = '确认'; button.setAttribute('data-mode', 'save'); } return false; }
 function handleEditOrSave(formId, buttonId){ const button = document.getElementById(buttonId); if(!button){ return false; } const mode = button.getAttribute('data-mode') || 'edit'; if(mode === 'save'){ const form = document.getElementById(formId); if(form){ openDeleteModal({ title:'确认保存', text:'确认保存当前修改吗？', onOk: function(){ form.submit(); return true; } }); } return false; } beginEdit(formId, buttonId); }
+function focusCamera(){
+    if(!scanStream){ return; }
+    var videoTrack = scanStream.getVideoTracks()[0];
+    if(!videoTrack){ return; }
+    var capabilities = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+    if(!capabilities.focusMode){ return; }
+    try{
+        videoTrack.applyConstraints({
+            advanced: [{ focusMode: 'continuous' }]
+        }).catch(function(){
+            try{
+                videoTrack.applyConstraints({
+                    advanced: [{ focusMode: 'auto' }]
+                }).catch(function(){});
+            }catch(e){}
+        });
+    }catch(e){}
+}
 // 标签扫描弹窗 - 完整相机OCR功能
 var scanStream = null;
 var scanTorch = false;
@@ -197,11 +215,17 @@ function scanInline(){
         return;
     }
     if(statusEl){ statusEl.textContent = '识别中...'; statusEl.style.color = '#15803d'; }
+    var videoWidth = video.videoWidth;
+    var videoHeight = video.videoHeight;
+    var boxWidth = videoWidth * 0.8;
+    var boxHeight = 40;
+    var boxX = (videoWidth - boxWidth) / 2;
+    var boxY = (videoHeight - boxHeight) / 2;
     var canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    canvas.width = boxWidth;
+    canvas.height = boxHeight;
     var ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0);
+    ctx.drawImage(video, boxX, boxY, boxWidth, boxHeight, 0, 0, boxWidth, boxHeight);
     canvas.toBlob(function(blob){
         if(!blob){
             if(statusEl){ statusEl.textContent = '截图失败'; statusEl.style.color = '#dc2626'; }
@@ -537,11 +561,12 @@ function requestInventory(formId, message){
     </div>
 <!-- 标签扫描弹窗 -->
 <div id="scan-dialog" class="upload-dialog" onclick="if(event.target===this){closeScanDialog();}">
-    <div class="upload-dialog-card" style="max-width:320px;">
+    <div class="upload-dialog-card">
         <div class="upload-dialog-title">标签识别</div>
-        <div style="position:relative;width:100%;height:180px;background:#0f172a;border-radius:12px;overflow:hidden;margin-bottom:8px;">
+        <div style="position:relative;width:100%;height:360px;background:#0f172a;border-radius:12px;overflow:hidden;margin-bottom:8px;cursor:pointer;" onclick="focusCamera()">
             <video id="scan-video-inline" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;"></video>
             <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:80%;height:40px;border:2px solid rgba(255,255,255,.9);border-radius:12px;box-shadow:0 0 0 9999px rgba(15,23,42,.35);pointer-events:none;"></div>
+            <div style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);font-size:12px;color:rgba(255,255,255,.6);white-space:nowrap;">点击调焦</div>
         </div>
         <div id="scan-dialog-status" style="min-height:24px;font-size:15px;font-weight:700;text-align:center;margin-bottom:6px;color:#666;"></div>
         <div class="upload-dialog-actions">
