@@ -44,6 +44,8 @@ WEBDAV_MOUNT_SERVICE="/etc/systemd/system/${WEBDAV_SERVICE_NAME}.service"
 
 STORAGE_BACKEND="local"
 CLOUDDRIVE_SOURCE=""
+RCLONE_MOUNT="/mnt/rclone"
+RCLONE_REMOTE=""
 ASSET_CLOUDDRIVE_BIND_SERVICE_NAME="asset-manager-clouddrive-bind"
 ASSET_CLOUDDRIVE_BIND_SERVICE="/etc/systemd/system/${ASSET_CLOUDDRIVE_BIND_SERVICE_NAME}.service"
 ASSET_CLOUDDRIVE_WAIT_SCRIPT="/usr/local/bin/asset-manager-clouddrive-wait.sh"
@@ -113,6 +115,8 @@ DAV_USER=${DAV_USER@Q}
 DAV_PASS=${DAV_PASS@Q}
 STORAGE_BACKEND=${STORAGE_BACKEND@Q}
 CLOUDDRIVE_SOURCE=${CLOUDDRIVE_SOURCE@Q}
+RCLONE_MOUNT=${RCLONE_MOUNT@Q}
+RCLONE_REMOTE=${RCLONE_REMOTE@Q}
 CD_INSTALL_DIR=${CD_INSTALL_DIR@Q}
 CD_BIN_FILE=${CD_BIN_FILE@Q}
 CD_HOME=${CD_HOME@Q}
@@ -144,6 +148,8 @@ ensure_state_defaults() {
     : "${DAV_PASS:=}"
     : "${STORAGE_BACKEND:=local}"
     : "${CLOUDDRIVE_SOURCE:=}"
+    : "${RCLONE_MOUNT:=/mnt/rclone}"
+    : "${RCLONE_REMOTE:=}"
     : "${CD_INSTALL_DIR:=/opt/clouddrive}"
     : "${CD_BIN_FILE:=${CD_INSTALL_DIR}/clouddrive}"
     : "${CD_HOME:=/var/lib/clouddrive}"
@@ -239,7 +245,6 @@ install_dependencies() {
     fi
     systemctl enable --now cron
     check_fuse
-    prepare_dirs
     save_state
     ok "依赖安装完成"
 }
@@ -429,6 +434,7 @@ setup_admin_user() {
     local admin_pass="$2"
     info "写入管理员账号到数据库"
     mysql "$DB_NAME" <<EOF_ADMIN
+DELETE FROM users WHERE username='${admin_user}';
 INSERT INTO users (username, password) VALUES ('${admin_user}', '${admin_pass}');
 EOF_ADMIN
     ok "管理员账号已创建：${admin_user}"
@@ -498,17 +504,71 @@ configure_nginx() {
     echo "  1 = 2083（默认，不影响服务器上现有 nginx 443 业务）"
     echo "  2 = 443（标准 HTTPS 端口）"
     read -r -p "请选择 [1/2] (默认 1): " port_choice
+
+    local use_proxy_mode=0
+    local internal_https_port="2443"
+
     case "${port_choice:-1}" in
-        2) PUBLIC_PORT="443" ;;
-        *) PUBLIC_PORT="2083" ;;
+        2)
+            use_proxy_mode=1
+            PUBLIC_PORT="$internal_https_port"
+            info "使用端口: 443（代理模式，ISM 监听内部端口 ${internal_https_port}）"
+            ;;
+        *)
+            PUBLIC_PORT="2083"
+            info "使用端口: 2083"
+            ;;
     esac
-    info "使用端口: ${PUBLIC_PORT}"
     save_state
 
     info "配置 Nginx 反向代理"
+
+    # 生成 nginx 配置
     if [ -n "$DOMAIN" ] && [ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ] && [ -f "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" ]; then
-        write_nginx_https
-        ok "检测到证书，已配置 https://${DOMAIN}:${PUBLIC_PORT}"
+        if [ "$use_proxy_mode" = "1" ]; then
+            # 代理模式：只监听内部 HTTPS
+            cat > "$NGINX_SITE_FILE" <<EOF_NGINX_HTTPS
+server {
+    listen 127.0.0.1:${internal_https_port} ssl http2;
+    listen [::1]:${internal_https_port} ssl http2;
+    server_name ${DOMAIN};
+
+    ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+
+    client_max_body_size 30m;
+
+    location / {
+        proxy_pass http://127.0.0.1:${INTERNAL_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 300;
+        proxy_connect_timeout 60;
+        proxy_send_timeout 300;
+    }
+}
+EOF_NGINX_HTTPS
+            ok "代理模式已启用，ISM 监听内部端口 ${internal_https_port}"
+            echo -e "${YELLOW}请在代理工具中为 ${DOMAIN}:443 添加以下转发规则：${NC}"
+            echo ""
+            echo -e "${BOLD}location / {${NC}"
+            echo -e "    proxy_pass https://127.0.0.1:${internal_https_port};"
+            echo -e "    proxy_ssl_verify off;"
+            echo -e "}${NC}"
+            echo ""
+        else
+            # 标准模式：监听 PUBLIC_PORT
+            write_nginx_https
+            if [ "$PUBLIC_PORT" = "443" ]; then
+                ok "检测到证书，已配置 https://${DOMAIN}:${PUBLIC_PORT}"
+            else
+                ok "检测到证书，已配置 https://${DOMAIN}:${PUBLIC_PORT}"
+            fi
+        fi
     else
         write_nginx_http
         if [ -n "$DOMAIN" ]; then
@@ -528,6 +588,8 @@ configure_nginx() {
     else
         warn "Nginx 已重启，但暂未检测到 ${PUBLIC_PORT} 端口监听，请执行：systemctl status nginx --no-pager"
     fi
+
+    save_state
 }
 
 stop_asset_clouddrive_bind_service() {
@@ -852,6 +914,181 @@ switch_to_local_storage() {
     echo "备份脚本已更新：$BACKUP_SCRIPT"
 }
 
+set_storage_mount_path() {
+    load_state
+    ensure_state_defaults
+
+    echo "菜单 6：设置系统写入路径"
+    echo "=========================================="
+    echo ""
+    echo "说明："
+    echo "  1. 输入一个挂载点路径（如 /mnt/mount）"
+    echo "  2. 系统将自动设置为该路径下的 /ism_images 子目录"
+    echo "  3. 例如：输入 /mnt/mount → 实际路径为 /mnt/mount/ism_images"
+    echo ""
+    echo "提示："
+    echo "  - 如果输入的是 WebDAV/CloudDrive/rclone 挂载点，请确保已通过"
+    echo "    mount.sh 脚本完成挂载和目录创建"
+    echo "  - 输入的路径必须已存在且可写"
+    echo "  - 程序会在该路径下自动创建 assets/accessories/sql_backups 目录"
+    echo ""
+    echo "=========================================="
+    echo ""
+
+    read -r -p "请输入挂载点路径: " mount_input
+
+    mount_input=$(echo "$mount_input" | tr -d '[:space:]')
+
+    if [ -z "$mount_input" ]; then
+        warn "路径不能为空"
+        return 1
+    fi
+
+    # 移除末尾的斜杠
+    mount_input="${mount_input%/}"
+
+    if [ ! -d "$mount_input" ]; then
+        err "路径不存在或无法访问：${mount_input}"
+        return 1
+    fi
+
+    # 检查路径是否可写
+    if ! touch "$mount_input/.write_test" 2>/dev/null; then
+        err "路径无写权限：${mount_input}"
+        return 1
+    fi
+    rm -f "$mount_input/.write_test"
+
+    local upload_path="${mount_input}/ism_images"
+
+    echo ""
+    echo "配置信息："
+    echo "  挂载点：${mount_input}"
+    echo "  实际路径：${upload_path}"
+    echo ""
+    read -r -p "确认配置？(y/n): " confirm
+
+    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+        warn "已取消配置"
+        return 0
+    fi
+
+    # 停止所有挂载相关的服务
+    stop_webdav_mount_service
+    stop_asset_clouddrive_bind_service
+
+    # 创建目录结构
+    mkdir -p "$upload_path/assets" "$upload_path/accessories" "$upload_path/sql_backups"
+
+    # 更新配置文件
+    if [ -f "${APP_ROOT}/config.yaml" ]; then
+        cp -f "${APP_ROOT}/config.yaml" "${APP_ROOT}/config.yaml.bak_$(date +%Y%m%d_%H%M%S)"
+        patch_config_upload_folder "$upload_path"
+    else
+        warn "未发现 ${APP_ROOT}/config.yaml，跳过程序配置修改"
+    fi
+
+    reset_asset_systemd_to_plain
+    STORAGE_BACKEND="custom"
+    save_state
+    write_backup_script
+
+    if systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}\.service"; then
+        systemctl restart "$SERVICE_NAME"
+    fi
+
+    ok "系统写入路径已设置"
+    echo "挂载点：${mount_input}"
+    echo "实际路径：${upload_path}"
+    echo "备份脚本已更新：$BACKUP_SCRIPT"
+}
+
+switch_storage_backend_menu() {
+    load_state
+    ensure_state_defaults
+
+    while true; do
+        echo "菜单 6：设置系统写入路径"
+        echo "  1 = 切换到 WebDAV"
+        echo "  2 = 切换到 CloudDrive"
+        echo "  3 = 切换到 rclone"
+        echo "  4 = 切换到本地目录"
+        echo "  0 = 返回主菜单"
+        read -r -p "请选择 [1/2/3/4/0]: " storage_choice
+
+        case "${storage_choice:-0}" in
+            1)
+                switch_to_webdav_storage
+                submenu_pause
+                ;;
+            2)
+                switch_to_clouddrive_storage
+                submenu_pause
+                ;;
+            3)
+                switch_to_rclone_storage
+                submenu_pause
+                ;;
+            4)
+                switch_to_local_storage
+                submenu_pause
+                ;;
+            0|"")
+                warn "已返回主菜单"
+                return 0
+                ;;
+            *)
+                warn "无效选项，请重新输入"
+                submenu_pause
+                ;;
+        esac
+        echo
+    done
+}
+
+switch_to_rclone_storage() {
+    load_state
+    ensure_state_defaults
+
+    echo "菜单 6 -> rclone：设置系统写入路径"
+    echo "rclone 挂载目录：${RCLONE_MOUNT}"
+    echo
+
+    stop_webdav_mount_service
+    stop_asset_clouddrive_bind_service
+
+    mkdir -p "$RCLONE_MOUNT"
+
+    if ! mountpoint -q "$RCLONE_MOUNT"; then
+        err "rclone 挂载点不可用：${RCLONE_MOUNT}，请先通过外部脚本挂载"
+        return 1
+    fi
+
+    info "检测到 ${RCLONE_MOUNT} 已挂载"
+
+    local RCLONE_UPLOAD_ROOT="${RCLONE_MOUNT}/ism_images"
+    mkdir -p "$RCLONE_UPLOAD_ROOT/assets" "$RCLONE_UPLOAD_ROOT/accessories" "$RCLONE_UPLOAD_ROOT/sql_backups"
+
+    if [ -f "${APP_ROOT}/config.yaml" ]; then
+        cp -f "${APP_ROOT}/config.yaml" "${APP_ROOT}/config.yaml.bak_rclone_$(date +%Y%m%d_%H%M%S)"
+        patch_config_upload_folder "$RCLONE_UPLOAD_ROOT"
+    else
+        warn "未发现 ${APP_ROOT}/config.yaml，跳过程序配置修改"
+    fi
+
+    reset_asset_systemd_to_plain
+    STORAGE_BACKEND="rclone"
+    save_state
+    write_backup_script
+
+    if systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}\.service"; then
+        systemctl restart "$SERVICE_NAME"
+    fi
+
+    ok "系统写入路径已切换到 rclone：${RCLONE_UPLOAD_ROOT}"
+    echo "备份脚本已更新：$BACKUP_SCRIPT"
+}
+
 switch_to_clouddrive_storage() {
     load_state
     ensure_state_defaults
@@ -921,9 +1158,10 @@ switch_storage_backend_menu() {
         echo "菜单 6：设置系统写入路径"
         echo "  1 = 切换到 WebDAV"
         echo "  2 = 切换到 CloudDrive"
-        echo "  3 = 切换到本地目录"
+        echo "  3 = 切换到 rclone"
+        echo "  4 = 切换到本地目录"
         echo "  0 = 返回主菜单"
-        read -r -p "请选择 [1/2/3/0]: " storage_choice
+        read -r -p "请选择 [1/2/3/4/0]: " storage_choice
 
         case "${storage_choice:-0}" in
             1)
@@ -935,6 +1173,10 @@ switch_storage_backend_menu() {
                 submenu_pause
                 ;;
             3)
+                switch_to_rclone_storage
+                submenu_pause
+                ;;
+            4)
                 switch_to_local_storage
                 submenu_pause
                 ;;
@@ -1550,6 +1792,25 @@ install_asset_system() {
     setup_python_env
     setup_database
     setup_admin_user "$ADMIN_USER" "$ADMIN_PASS"
+
+    if [ -f "${APP_ROOT}/config.yaml" ]; then
+        python3 - "${APP_ROOT}/config.yaml" "$ADMIN_USER" "$ADMIN_PASS" <<'PY'
+from pathlib import Path
+import sys, re
+config_file = Path(sys.argv[1])
+admin_user = sys.argv[2]
+admin_pass = sys.argv[3]
+text = config_file.read_text(encoding='utf-8')
+text = re.sub(r'^admin_user:.*$', f'admin_user: {admin_user}', text, flags=re.MULTILINE)
+text = re.sub(r'^admin_password:.*$', f'admin_password: {admin_pass}', text, flags=re.MULTILINE)
+if 'admin_user:' not in text:
+    text += f'\nadmin_user: {admin_user}\n'
+if 'admin_password:' not in text:
+    text += f'admin_password: {admin_pass}\n'
+config_file.write_text(text, encoding='utf-8')
+PY
+    fi
+
     write_systemd
     configure_nginx
     write_backup_script
@@ -1566,22 +1827,60 @@ install_asset_system() {
 confirm_install_asset_system() {
     echo "你选择了【2 安装系统】。"
     echo "该操作会部署程序、初始化数据库、配置 systemd 和 Nginx。"
-    echo "请设置管理员账号和密码（明文保存到 /root/ism/config.yaml）："
-    local ADMIN_USER=""
-    local ADMIN_PASS=""
-    while [ -z "$ADMIN_USER" ]; do
-        read -r -p "管理员用户名: " ADMIN_USER
-    done
-    while [ -z "$ADMIN_PASS" ]; do
-        read -r -s -p "管理员密码: " ADMIN_PASS
-        echo
-    done
     echo
 
-    read -r -p "确认安装吗？输入 y/Y 继续，n/N 取消并返回主菜单: " confirm_install
+    local existing_creds
+    local existing_user=""
+    local existing_pass=""
+
+    if [ -f "${APP_ROOT}/config.yaml" ]; then
+        existing_user=$(grep -E "^admin_user:" "${APP_ROOT}/config.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d "'" | tr -d '"' || true)
+        existing_pass=$(grep -E "^admin_password:" "${APP_ROOT}/config.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d "'" | tr -d '"' || true)
+    fi
+
+    local ADMIN_USER=""
+    local ADMIN_PASS=""
+
+    if [ -n "$existing_user" ]; then
+        echo "检测到已有的管理员账号："
+        echo "  当前用户名: $existing_user"
+        echo "  当前密码: $existing_pass"
+        echo
+        read -r -p "新用户名 (回车保留现有: $existing_user): " ADMIN_USER
+        if [ -z "$ADMIN_USER" ]; then
+            ADMIN_USER="$existing_user"
+        fi
+
+        read -r -p "新密码 (回车保留现有: $existing_pass): " ADMIN_PASS
+        if [ -z "$ADMIN_PASS" ]; then
+            ADMIN_PASS="$existing_pass"
+        fi
+    else
+        echo "请设置管理员账号和密码（明文保存到 /root/ism/config.yaml）："
+        echo
+        while [ -z "$ADMIN_USER" ]; do
+            read -r -p "管理员用户名: " ADMIN_USER
+            if [ -z "$ADMIN_USER" ]; then
+                warn "用户名不能为空，请重新输入"
+            fi
+        done
+
+        while [ -z "$ADMIN_PASS" ]; do
+            read -r -p "管理员密码: " ADMIN_PASS
+            if [ -z "$ADMIN_PASS" ]; then
+                warn "密码不能为空，请重新输入"
+            elif [ ${#ADMIN_PASS} -lt 6 ]; then
+                warn "密码长度至少6位，请重新输入"
+                ADMIN_PASS=""
+            fi
+        done
+    fi
+
+    echo
+    read -r -p "确认安装吗？输入 YES 继续，其他任意键取消: " confirm_install
 
     case "${confirm_install:-n}" in
-        y|Y)
+        YES)
             install_asset_system "$ADMIN_USER" "$ADMIN_PASS"
             ;;
         *)
@@ -1692,6 +1991,48 @@ check_connectivity() {
                 warn "请检查：systemctl status ${ASSET_CLOUDDRIVE_BIND_SERVICE_NAME}.service --no-pager"
                 return 1
             fi
+            ;;
+
+        rclone)
+            info "检测 rclone 挂载目录"
+            mkdir -p "$RCLONE_MOUNT"
+
+            if ! mountpoint -q "$RCLONE_MOUNT"; then
+                err "rclone 挂载点未挂载：${RCLONE_MOUNT}"
+                return 1
+            fi
+
+            local RCLONE_UPLOAD_ROOT="${RCLONE_MOUNT}/ism_images"
+            mkdir -p "$RCLONE_UPLOAD_ROOT/assets" "$RCLONE_UPLOAD_ROOT/accessories" "$RCLONE_UPLOAD_ROOT/sql_backups"
+            touch "$RCLONE_UPLOAD_ROOT/.rclone_probe_${probe_ts}"
+            touch "$RCLONE_UPLOAD_ROOT/sql_backups/.sql_backup_probe_${probe_ts}"
+            ok "rclone 存储检测通过"
+            echo "rclone 挂载点：$RCLONE_MOUNT"
+            echo "程序图片目录：$RCLONE_UPLOAD_ROOT"
+            echo "SQL 备份目录：$RCLONE_UPLOAD_ROOT/sql_backups"
+            ;;
+
+        custom)
+            info "检测自定义存储路径"
+            # 从 config.yaml 读取 upload_folder
+            local custom_path=$(grep -E "^upload_folder:" "${APP_ROOT}/config.yaml" 2>/dev/null | awk '{print $2}' | tr -d "'" | tr -d '"' || true)
+
+            if [ -z "$custom_path" ]; then
+                err "未能读取自定义存储路径，请检查配置"
+                return 1
+            fi
+
+            if [ ! -d "$custom_path" ]; then
+                err "自定义存储路径不存在：${custom_path}"
+                return 1
+            fi
+
+            mkdir -p "$custom_path/assets" "$custom_path/accessories" "$custom_path/sql_backups"
+            touch "$custom_path/.custom_probe_${probe_ts}"
+            touch "$custom_path/sql_backups/.sql_backup_probe_${probe_ts}"
+            ok "自定义存储路径检测通过"
+            echo "存储路径：$custom_path"
+            echo "SQL 备份目录：$custom_path/sql_backups"
             ;;
 
         local)
@@ -1882,40 +2223,60 @@ update_domain() {
         fi
     fi
 
-    # ========== 新增：检测端口 2083 被哪些其他项目占用 ==========
-    echo "检查端口 ${PUBLIC_PORT} 上的其他监听配置..."
-    local other_configs=""
-    if [ -d /etc/nginx/sites-enabled ]; then
-        other_configs=$(grep -l "listen.*${PUBLIC_PORT}" /etc/nginx/sites-enabled/*.conf 2>/dev/null | grep -v "$(basename "$NGINX_SITE_LINK")" || true)
-    fi
-    if [ -n "$other_configs" ]; then
-        echo -e "${YELLOW}⚠️ 警告：以下 Nginx 配置文件也监听了端口 ${PUBLIC_PORT}：${NC}"
-        echo "$other_configs" | sed 's/^/  - /'
-        echo -e "${YELLOW}这可能导致域名访问混乱（多个项目共用同一端口）。${NC}"
-        echo -e "${YELLOW}建议您手动修改其他项目的端口，或停止它们与 ISM 的端口冲突。${NC}"
-        echo
-    fi
+    # 检测端口冲突
+    local use_proxy_mode=0
+    local internal_https_port="2443"
 
-    # 额外检测 Xray 直连（x-ui-pro 可能直接监听 2083）
-    if command -v ss >/dev/null 2>&1; then
-        local xray_pid=$(ss -lntp 2>/dev/null | grep ":${PUBLIC_PORT}" | grep -i xray | awk -F'pid=' '{print $2}' | cut -d',' -f1 | head -1)
-        if [ -n "$xray_pid" ]; then
-            echo -e "${YELLOW}⚠️ 警告：Xray 进程（PID $xray_pid）正在直接监听端口 ${PUBLIC_PORT}，可能与 ISM 的 Nginx 配置冲突。${NC}"
-            echo -e "${YELLOW}如果您希望 ISM 独占该端口，请修改 x-ui-pro 的节点配置将端口改为其他值（如 2084）。${NC}"
-            echo
+    if [ -n "$new_domain" ]; then
+        if grep -r "listen.*443" /etc/nginx/sites-enabled/*.conf 2>/dev/null | grep -q "server_name.*${new_domain}"; then
+            echo -e "${YELLOW}⚠️ 检测到 443 端口已被其他应用占用（server_name: ${new_domain}）${NC}"
+            echo -e "${YELLOW}将自动启用代理模式：ISM 监听内部端口 ${internal_https_port}${NC}"
+            use_proxy_mode=1
         fi
     fi
 
-    # ========== 备份状态文件 ==========
+    # 备份状态文件
     local bak_suffix=".bak.$(date '+%Y%m%d_%H%M%S')"
     cp -a "$STATE_FILE" "${STATE_FILE}${bak_suffix}" 2>/dev/null || true
 
-    # ========== 更新 DOMAIN ==========
+    # 更新 DOMAIN
     DOMAIN="$new_domain"
     save_state
 
-    # ========== 重新生成 nginx 配置（强制覆盖） ==========
-    if [ -n "$DOMAIN" ] && [ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]; then
+    # 重新生成 nginx 配置
+    if [ "$use_proxy_mode" = "1" ]; then
+        # 代理模式：只监听内部端口
+        cat > "$NGINX_SITE_FILE" <<EOF
+server {
+    listen 127.0.0.1:${internal_https_port} ssl;
+    server_name ${DOMAIN};
+
+    ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+    client_max_body_size 30m;
+
+    location / {
+        proxy_pass http://127.0.0.1:${INTERNAL_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 300;
+    }
+}
+EOF
+        echo -e "${GREEN}✅ 代理模式配置已生成${NC}"
+        echo -e "${YELLOW}请在代理工具的 ${new_domain}:443 配置中添加以下转发规则：${NC}"
+        echo ""
+        echo -e "${BOLD}location /ism {${NC}"
+        echo -e "    proxy_pass https://127.0.0.1:${internal_https_port};"
+        echo -e "    proxy_ssl_verify off;"
+        echo -e "}${NC}"
+        echo ""
+    elif [ -n "$DOMAIN" ] && [ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]; then
+        # 标准模式：监听 PUBLIC_PORT（2083）
         cat > "$NGINX_SITE_FILE" <<EOF
 server {
     listen ${PUBLIC_PORT} ssl;
@@ -1939,6 +2300,7 @@ server {
 EOF
         echo -e "${GREEN}✅ 已配置 HTTPS: https://${DOMAIN}:${PUBLIC_PORT}${NC}"
     else
+        # HTTP 模式
         cat > "$NGINX_SITE_FILE" <<EOF
 server {
     listen ${PUBLIC_PORT};
@@ -1987,14 +2349,13 @@ EOF
 
     echo "============================================="
     echo -e "${GREEN}✅ ISM 域名更新完成${NC}"
-    [ -n "$DOMAIN" ] && echo "ISM 访问地址: https://${DOMAIN}:${PUBLIC_PORT}/"
+    if [ "$use_proxy_mode" = "0" ]; then
+        [ -n "$DOMAIN" ] && echo "ISM 访问地址: https://${DOMAIN}:${PUBLIC_PORT}/"
+    else
+        echo "ISM 已接入代理工具，通过代理工具访问"
+    fi
     echo "旧状态备份: ${STATE_FILE}${bak_suffix}"
     echo "============================================="
-
-    if [ -n "$other_configs" ] || [ -n "$xray_pid" ]; then
-        echo -e "${YELLOW}📢 提醒：检测到端口 ${PUBLIC_PORT} 存在其他服务的监听，可能导致域名访问不一致。${NC}"
-        echo -e "${YELLOW}   请根据上述提示手动调整其他服务的端口配置，或忽略（如果您已知晓）。${NC}"
-    fi
 }
 
 
@@ -2002,7 +2363,7 @@ show_menu() {
     clear
     printf "\n"
     printf "${BOLD}${BLUE}=========================================================================${NC}\n"
-    printf "${BOLD}${WHITE}         ISM WebDAV / CloudDrive 管理菜单                                ${NC}\n"
+    printf "${BOLD}${WHITE}         ISM 系统管理菜单                                               ${NC}\n"
     printf "${BOLD}${BLUE}=========================================================================${NC}\n"
 
     printf "${BOLD}${GREEN} [1] 安装依赖${NC}              ${WHITE}安装基础环境：MariaDB / Python / OCR${NC}\n"
@@ -2010,21 +2371,17 @@ show_menu() {
     printf "${BOLD}${BLUE}-------------------------------------------------------------------------${NC}\n"
 
     printf "${BOLD}${CYAN} [3] 重启系统${NC}              ${WHITE}重启 ism 服务${NC}\n"
-    printf "${BOLD}${YELLOW} [4] 安装/重置 WebDAV${NC}      ${WHITE}首次挂载或切换新的 WebDAV 网盘${NC}\n"
-    printf "${BOLD}${BLUE} [5] 安装 CloudDrive${NC}        ${WHITE}安装 CloudDrive 并写入 systemd${NC}\n"
-    printf "${BOLD}${CYAN} [6] 设置系统写入路径${NC}     ${WHITE}切换到WebDAV/ CloudDrive /本地目录${NC}\n"
-    printf "${BOLD}${YELLOW} [7] 连通性检测${NC}     ${WHITE}检测挂载、目录、写入是否正常${NC}\n"
+    printf "${BOLD}${CYAN} [6] 设置存储路径${NC}     ${WHITE}手动输入挂载路径（如 /mnt/mount）${NC}\n"
+    printf "${BOLD}${YELLOW} [7] 连通性检测${NC}           ${WHITE}检测挂载、目录、写入是否正常${NC}\n"
     printf "${BOLD}${YELLOW} [8] 管理cron备份任务${NC}      ${WHITE}生成、查看、删除数据库备份 cron${NC}\n"
     printf "${BOLD}${MAGENTA} [9] 恢复数据库${NC}            ${WHITE}从本地最新备份恢复数据库${NC}\n"
-    printf "${BOLD}${RED} [10] 卸载WebDAV${NC}            ${YELLOW}移除挂载并恢复本地上传目录${NC}\n"
-    printf "${BOLD}${RED} [11] 卸载 clouddrive${NC}        ${YELLOW}卸载且不删除 ${CD_MOUNT_DIR}${NC}\n"
-	printf "${BOLD}${GREEN} [12] 更新域名/HTTPS${NC}        ${WHITE}更换域名并自动申请/更新 Let's Encrypt 证书${NC}\n"
-    printf "${BOLD}${RED} [13] 卸载系统${NC}              ${YELLOW}卸载整个 ISM 系统（保留 nginx/MariaDB）${NC}\n"
+	printf "${BOLD}${GREEN} [10] 更新域名/HTTPS${NC}        ${WHITE}更换域名并自动申请/更新 Let's Encrypt 证书${NC}\n"
+    printf "${BOLD}${RED} [11] 卸载系统${NC}              ${YELLOW}卸载整个 ISM 系统（保留 nginx/MariaDB）${NC}\n"
     printf "${BOLD}${RED} [0] 退出${NC}                  ${WHITE}退出当前脚本${NC}\n"
 
     printf "${BOLD}${BLUE}-------------------------------------------------------------------------${NC}\n"
-    printf "${BOLD}${YELLOW} ★ 推荐顺序：${NC}${GREEN}1 -> 2 -> 4/5 -> 6 -> 7 -> 8${NC}\n"
-    printf "${BOLD}${CYAN} ★ 说明：${NC}${WHITE}切换存储目录后，备份脚本写入路径会自动更新，无需重新执行菜单 6${NC}\n"
+    printf "${BOLD}${YELLOW} ★ 推荐顺序：${NC}${GREEN}1 -> 2 -> 6 -> 7 -> 8${NC}\n"
+    printf "${BOLD}${CYAN} ★ 说明：${NC}${WHITE}存储挂载由独立脚本 mount.sh 管理${NC}\n"
     printf "${BOLD}${BLUE}=========================================================================${NC}\n"
     printf "\n"
 }
@@ -2033,7 +2390,6 @@ main() {
     require_root
     load_state
     ensure_state_defaults
-    mkdir -p "$DAV_MOUNT" "$CD_MOUNT_DIR"
 
     while true; do
         local_need_pause=1
@@ -2044,15 +2400,12 @@ main() {
             1) install_dependencies ;;
             2) confirm_install_asset_system ;;
             3) restart_service ;;
-            4) install_webdav; local_need_pause=0 ;;
-            5) manage_clouddrive_menu; local_need_pause=0 ;;
-            6) switch_storage_backend_menu; local_need_pause=0 ;;
+            6) set_storage_mount_path ;;
             7) check_connectivity ;;
             8) setup_backup; local_need_pause=0 ;;
             9) restore_database ;;
-            10) uninstall_webdav ;;
-            11) uninstall_clouddrive_app ;;
-			12) update_domain ;;   # 新增
+            10) update_domain ;;
+            11) uninstall_system ;;
             0) exit 0 ;;
             *) warn "无效选项" ;;
         esac

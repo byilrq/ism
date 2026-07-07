@@ -69,37 +69,18 @@ echo "[OK] 本地数据库备份完成：$BACKUP_FILE"
 # CloudDrive：挂载点是 /mnt/CloudDrive，upload_folder 是其子目录，检查父挂载点+可写性
 # WebDAV：upload_folder 本身就是挂载点
 
-# 远程挂载同步：upload_folder 是挂载点下的子目录
-# 统一用 父挂载点检查 + 目录可写性检测，不依赖子目录的 mountpoint
-REMOTE_OK=false
-REMOTE_LABEL=""
-
-if [[ "$UPLOAD_FOLDER" == "/mnt/webdav_mount"* ]]; then
-    REMOTE_LABEL="WebDAV"
-    if mountpoint -q "/mnt/webdav_mount" && [ -d "$UPLOAD_FOLDER" ] && touch "$UPLOAD_FOLDER/.write_test" 2>/dev/null; then
-        rm -f "$UPLOAD_FOLDER/.write_test"
-        REMOTE_OK=true
-    fi
-
-elif [[ "$UPLOAD_FOLDER" == "/mnt/CloudDrive"* ]]; then
-    REMOTE_LABEL="CloudDrive"
-    if mountpoint -q "/mnt/CloudDrive" && [ -d "$UPLOAD_FOLDER" ] && touch "$UPLOAD_FOLDER/.write_test" 2>/dev/null; then
-        rm -f "$UPLOAD_FOLDER/.write_test"
-        REMOTE_OK=true
-    fi
-fi
-
-if $REMOTE_OK; then
+# 检查备份目录是否可用并同步
+if [ -d "$UPLOAD_FOLDER" ] && touch "$UPLOAD_FOLDER/.write_test" 2>/dev/null; then
+    rm -f "$UPLOAD_FOLDER/.write_test"
     mkdir -p "$REMOTE_BACKUP_ROOT"
-    if [ -n "${REMOTE_LABEL:-}" ]; then
-        cp -f "$BACKUP_FILE" "$REMOTE_BACKUP_DATED"
-        echo "[OK] ${REMOTE_LABEL} 备份已同步到 $REMOTE_BACKUP_DATED"
-    else
-        cp -f "$BACKUP_FILE" "$REMOTE_BACKUP_FILE"
-        echo "[OK] 远程备份已同步到 $REMOTE_BACKUP_FILE"
-    fi
+    cp -f "$BACKUP_FILE" "$REMOTE_BACKUP_DATED"
+    echo "[OK] 备份已同步到 $REMOTE_BACKUP_DATED"
+
+    # 清理 7 天前的备份文件
+    find "$REMOTE_BACKUP_ROOT" -name "ism_latest.*.sql" -mtime +7 -delete 2>/dev/null || true
+    echo "[OK] 已清理旧备份文件"
 else
-    echo "[OK] 本地存储模式，仅保留本地备份：$BACKUP_FILE"
+    echo "[OK] 备份目录暂不可用或路径不存在，仅保留本地备份：$BACKUP_FILE"
 fi
 
 echo "[OK] $(date '+%F %T') 数据库备份流程结束"
