@@ -9,6 +9,7 @@ YELLOW='\033[33m'
 RED='\033[31m'
 CYAN='\033[36m'
 BLUE='\033[34m'
+MAGENTA='\033[35m'
 
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
 yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
@@ -175,10 +176,10 @@ PY
 
 install_webdav() {
     echo ""
-    echo -e "${CYAN}菜单 1：安装/重置 WebDAV${NC}"
-    echo -e "  ${GREEN}1${NC} = ${BOLD}安装 WebDAV${NC}            (首次安装)"
-    echo -e "  ${YELLOW}2${NC} = ${BOLD}重置 WebDAV 参数${NC}      (切换网盘)"
-    echo -e "  ${CYAN}0${NC} = 返回主菜单"
+    echo -e "${CYAN}菜单 1：${BOLD}${BLUE}WebDAV 配置${NC}"
+    echo -e "  ${BLUE}[1]${NC} ${BOLD}${BLUE}首次配置${NC}            (初始化 WebDAV)"
+    echo -e "  ${YELLOW}[2]${NC} ${BOLD}${YELLOW}重新配置${NC}           (更换网盘)"
+    echo -e "  ${CYAN}[0]${NC} ${BOLD}${CYAN}返回主菜单${NC}"
     read -r -p "请选择 [0-2]: " webdav_action
     echo
 
@@ -553,11 +554,11 @@ show_clouddrive_status() {
 manage_clouddrive_menu() {
     while true; do
         echo ""
-        echo -e "${CYAN}菜单 2：安装 CloudDrive${NC}"
-        echo -e "  ${GREEN}1${NC} = ${BOLD}安装/重装 CloudDrive${NC}  (首次安装)"
-        echo -e "  ${YELLOW}2${NC} = ${BOLD}恢复 CloudDrive 挂载${NC}  (重新挂载)"
-        echo -e "  ${BLUE}3${NC} = ${BOLD}查看 CloudDrive 状态${NC}  (检查状态)"
-        echo -e "  ${CYAN}0${NC} = 返回主菜单"
+        echo -e "${CYAN}菜单 2：${BOLD}${MAGENTA}CloudDrive 配置${NC}"
+        echo -e "  ${MAGENTA}[1]${NC} ${BOLD}${MAGENTA}初始化安装${NC}         (首次启用)"
+        echo -e "  ${YELLOW}[2]${NC} ${BOLD}${YELLOW}恢复挂载${NC}           (重新挂载)"
+        echo -e "  ${BLUE}[3]${NC} ${BOLD}${BLUE}查看状态${NC}           (检查配置)"
+        echo -e "  ${CYAN}[0]${NC} ${BOLD}${CYAN}返回主菜单${NC}"
         read -r -p "请选择 [0-3]: " cd_choice
 
         case "${cd_choice:-0}" in
@@ -714,11 +715,10 @@ configure_rclone_remote() {
     echo "    {\"access_token\":\"gfOx7ZDn...\",\"token_type\":\"bearer\",\"expiry\":\"0001-01-01T00:00:00Z\"}"
     echo "    <---End paste"
     echo ""
-    echo -e "${BLUE}[第 3 步]${NC} 复制 access_token 的值 (不包括花括号)"
+    echo -e "${BLUE}[第 3 步]${NC} 从上面的 JSON 中只复制 access_token 部分"
     echo ""
-    echo "    示例: gfOx7ZDnONSzyJXpmZKG7U5kZUyYiRxXpuuBhvC2ykEdat5tf1Day"
-    echo ""
-    echo -e "${BLUE}[第 4 步]${NC} 粘贴到下方"
+    echo "    删除这些内容: {\"access_token\":\""
+    echo "    删除这些内容: \",\"token_type\":\"bearer\",\"expiry\":\"0001-01-01T00:00:00Z\"}"
     echo ""
     echo "========================================"
     echo ""
@@ -990,17 +990,17 @@ show_menu() {
     echo -e "${CYAN}        挂载存储方式管理菜单${NC}"
     echo -e "${CYAN}===============================================${NC}"
     echo ""
-    echo -e "${GREEN}安装存储方式:${NC}"
-    echo -e "  ${GREEN}1${NC} = ${BOLD}安装/重置 WebDAV${NC}        (NAS/网盘)"
-    echo -e "  ${GREEN}2${NC} = ${BOLD}安装 CloudDrive${NC}         (本地挂载)"
-    echo -e "  ${GREEN}3${NC} = ${BOLD}安装 Rclone${NC}              (Pcloud)"
+    echo -e "${BOLD}${BLUE}配置存储方式:${NC}"
+    echo -e "  ${BLUE}[1]${NC} ${BOLD}${BLUE}WebDAV 配置${NC}              (NAS/网盘)"
+    echo -e "  ${MAGENTA}[2]${NC} ${BOLD}${MAGENTA}CloudDrive 配置${NC}         (本地挂载)"
+    echo -e "  ${YELLOW}[3]${NC} ${BOLD}${YELLOW}Rclone 配置${NC}              (Pcloud)"
     echo ""
-    echo -e "${RED}卸载存储方式:${NC}"
-    echo -e "  ${RED}4${NC} = ${BOLD}卸载 WebDAV${NC}"
-    echo -e "  ${RED}5${NC} = ${BOLD}卸载 CloudDrive${NC}"
-    echo -e "  ${RED}6${NC} = ${BOLD}卸载 Rclone${NC}"
+    echo -e "${BOLD}${RED}卸载存储方式:${NC}"
+    echo -e "  ${RED}[4]${NC} ${BOLD}${RED}卸载 WebDAV${NC}"
+    echo -e "  ${RED}[5]${NC} ${BOLD}${RED}卸载 CloudDrive${NC}"
+    echo -e "  ${RED}[6]${NC} ${BOLD}${RED}卸载 Rclone${NC}"
     echo ""
-    echo -e "  ${CYAN}0${NC} = 返回/退出"
+    echo -e "  ${CYAN}[0]${NC} ${BOLD}${CYAN}返回/退出${NC}"
     echo ""
     echo -e "${CYAN}===============================================${NC}"
 }
@@ -1031,11 +1031,11 @@ main() {
             3)
                 while true; do
                     echo ""
-                    echo -e "${CYAN}菜单 3：安装 Rclone${NC}"
-                    echo -e "  ${GREEN}1${NC} = ${BOLD}安装 Rclone${NC}          (安装依赖)"
-                    echo -e "  ${BLUE}2${NC} = ${BOLD}配置 Remote${NC}          (Pcloud 授权)"
-                    echo -e "  ${YELLOW}3${NC} = ${BOLD}挂载 Remote${NC}          (开始挂载)"
-                    echo -e "  ${CYAN}0${NC} = 返回主菜单"
+                    echo -e "${CYAN}菜单 3：${BOLD}${YELLOW}Rclone 配置${NC}"
+                    echo -e "  ${YELLOW}[1]${NC} ${BOLD}${YELLOW}初始化安装${NC}          (安装依赖)"
+                    echo -e "  ${BLUE}[2]${NC} ${BOLD}${BLUE}授权配置${NC}           (Pcloud 授权)"
+                    echo -e "  ${MAGENTA}[3]${NC} ${BOLD}${MAGENTA}启用挂载${NC}           (开始挂载)"
+                    echo -e "  ${CYAN}[0]${NC} ${BOLD}${CYAN}返回主菜单${NC}"
                     read -r -p "请选择 [0-3]: " rclone_choice
                     echo
 
