@@ -441,9 +441,16 @@ EOF_ADMIN
 }
 
 write_nginx_http() {
+    local listen_addr="0.0.0.0"
+
+    # 如果是 8080 端口，只监听本地（用于 xray fallback）
+    if [ "$PUBLIC_PORT" = "8080" ]; then
+        listen_addr="127.0.0.1"
+    fi
+
     cat > "$NGINX_SITE_FILE" <<EOF_NGINX_HTTP
 server {
-    listen ${PUBLIC_PORT};
+    listen ${listen_addr}:${PUBLIC_PORT};
     server_name ${DOMAIN:-_};
 
     client_max_body_size 30m;
@@ -466,9 +473,16 @@ EOF_NGINX_HTTP
 
 write_nginx_https() {
     local cert_dir="/etc/letsencrypt/live/${DOMAIN}"
+    local listen_addr="0.0.0.0"
+
+    # 如果是 8080 端口，只监听本地（用于 xray fallback）
+    if [ "$PUBLIC_PORT" = "8080" ]; then
+        listen_addr="127.0.0.1"
+    fi
+
     cat > "$NGINX_SITE_FILE" <<EOF_NGINX_HTTPS
 server {
-    listen ${PUBLIC_PORT} ssl;
+    listen ${listen_addr}:${PUBLIC_PORT} ssl;
     server_name ${DOMAIN};
 
     ssl_certificate ${cert_dir}/fullchain.pem;
@@ -494,27 +508,33 @@ EOF_NGINX_HTTPS
 
 configure_nginx() {
     load_state
-    read -r -p "请输入域名（可留空，直接用 IP 访问）: " domain_input
+    read -e -p "请输入域名（可留空，直接用 IP 访问）: " domain_input
     if [ -n "${domain_input:-}" ]; then
         DOMAIN="$domain_input"
     fi
 
     echo
-    echo "请选择 HTTPS 访问端口："
-    echo "  1 = 2083（默认，不影响服务器上现有 nginx 443 业务）"
-    echo "  2 = 443（标准 HTTPS 端口）"
-    read -r -p "请选择 [1/2] (默认 1): " port_choice
+    echo "请选择访问方式："
+    echo "  1 = 2083（独立端口，访问 https://域名:2083）"
+    echo "  2 = 443（与 xray 集成，访问 https://域名，需要 xray 配置 fallback）"
+    echo "  3 = 443（纯粹的 HTTPS 域名访问，不使用 xray）"
+    read -e -p "请选择 [1/2/3] (默认 1): " port_choice
 
-    local use_proxy_mode=0
-    local internal_https_port="2443"
+    local internal_https_port="2083"
 
     case "${port_choice:-1}" in
         2)
-            use_proxy_mode=1
-            PUBLIC_PORT="$internal_https_port"
-            info "使用端口: 443（代理模式，ISM 监听内部端口 ${internal_https_port}）"
+            internal_https_port="8080"
+            PUBLIC_PORT="8080"
+            info "使用端口: 8080（与 xray fallback 配合，仅本地监听）"
+            ;;
+        3)
+            internal_https_port="443"
+            PUBLIC_PORT="443"
+            info "使用端口: 443（纯粹的 HTTPS 域名访问）"
             ;;
         *)
+            internal_https_port="2083"
             PUBLIC_PORT="2083"
             info "使用端口: 2083"
             ;;
@@ -525,49 +545,12 @@ configure_nginx() {
 
     # 生成 nginx 配置
     if [ -n "$DOMAIN" ] && [ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ] && [ -f "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" ]; then
-        if [ "$use_proxy_mode" = "1" ]; then
-            # 代理模式：只监听内部 HTTPS
-            cat > "$NGINX_SITE_FILE" <<EOF_NGINX_HTTPS
-server {
-    listen 127.0.0.1:${internal_https_port} ssl http2;
-    listen [::1]:${internal_https_port} ssl http2;
-    server_name ${DOMAIN};
-
-    ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
-
-    client_max_body_size 30m;
-
-    location / {
-        proxy_pass http://127.0.0.1:${INTERNAL_PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_read_timeout 300;
-        proxy_connect_timeout 60;
-        proxy_send_timeout 300;
-    }
-}
-EOF_NGINX_HTTPS
-            ok "代理模式已启用，ISM 监听内部端口 ${internal_https_port}"
-            echo -e "${YELLOW}请在代理工具中为 ${DOMAIN}:443 添加以下转发规则：${NC}"
-            echo ""
-            echo -e "${BOLD}location / {${NC}"
-            echo -e "    proxy_pass https://127.0.0.1:${internal_https_port};"
-            echo -e "    proxy_ssl_verify off;"
-            echo -e "}${NC}"
-            echo ""
+        write_nginx_https
+        if [ "$PUBLIC_PORT" = "8080" ]; then
+            ok "检测到证书，ISM 已配置为与 xray fallback 配合（本地 127.0.0.1:8080）"
+            echo -e "${YELLOW}用户访问方式：https://${DOMAIN}（通过 xray 端口 443 转发）${NC}"
         else
-            # 标准模式：监听 PUBLIC_PORT
-            write_nginx_https
-            if [ "$PUBLIC_PORT" = "443" ]; then
-                ok "检测到证书，已配置 https://${DOMAIN}:${PUBLIC_PORT}"
-            else
-                ok "检测到证书，已配置 https://${DOMAIN}:${PUBLIC_PORT}"
-            fi
+            ok "检测到证书，已配置 https://${DOMAIN}:${PUBLIC_PORT}"
         fi
     else
         write_nginx_http
@@ -726,10 +709,10 @@ prompt_webdav_install() {
     echo "4) 数据库备份会同步到：/ism_images/sql_backups/。"
     echo
 
-    read -r -p "请输入 WebDAV Connection URL [${DAV_URL:-请从网盘后台复制}]: " input_dav_url
-    read -r -p "请输入 Connection ID / 用户名 [${DAV_USER:-按网盘后台显示填写}]: " input_user
-    read -r -p "请输入 Password: " input_pass
-    read -r -p "请输入本机挂载目录 [${DAV_MOUNT}]: " input_mount
+    read -e -p "请输入 WebDAV Connection URL [${DAV_URL:-请从网盘后台复制}]: " input_dav_url
+    read -e -p "请输入 Connection ID / 用户名 [${DAV_USER:-按网盘后台显示填写}]: " input_user
+    read -e -p "请输入 Password: " input_pass
+    read -e -p "请输入本机挂载目录 [${DAV_MOUNT}]: " input_mount
 
     if [ -n "${input_dav_url:-}" ]; then DAV_URL="$input_dav_url"; fi
     if [ -n "${input_user:-}" ]; then DAV_USER="$input_user"; fi
@@ -750,9 +733,9 @@ prompt_webdav_reset() {
     echo "3) 远端业务目录保持为：/${DAV_REMOTE_ROOT}/assets 和 /${DAV_REMOTE_ROOT}/accessories"
     echo
 
-    read -r -p "请输入新的 WebDAV Connection URL [${DAV_URL:-请从网盘后台复制}]: " input_dav_url
-    read -r -p "请输入新的 Connection ID / 用户名 [${DAV_USER:-按网盘后台显示填写}]: " input_user
-    read -r -p "请输入新的 Password [直接回车则保持当前密码]: " input_pass
+    read -e -p "请输入新的 WebDAV Connection URL [${DAV_URL:-请从网盘后台复制}]: " input_dav_url
+    read -e -p "请输入新的 Connection ID / 用户名 [${DAV_USER:-按网盘后台显示填写}]: " input_user
+    read -e -p "请输入新的 Password [直接回车则保持当前密码]: " input_pass
 
     if [ -n "${input_dav_url:-}" ]; then DAV_URL="$input_dav_url"; fi
     if [ -n "${input_user:-}" ]; then DAV_USER="$input_user"; fi
@@ -771,7 +754,7 @@ install_webdav() {
         echo "  1 = 安装 WebDAV"
         echo "  2 = 重置 WebDAV 参数并切换网盘"
         echo "  0 = 返回主菜单"
-        read -r -p "请选择 [1/2/0]: " webdav_action
+        read -e -p "请选择 [1/2/0]: " webdav_action
 
         case "${webdav_action:-0}" in
             1)
@@ -935,7 +918,7 @@ set_storage_mount_path() {
     echo "=========================================="
     echo ""
 
-    read -r -p "请输入挂载点路径: " mount_input
+    read -e -p "请输入挂载点路径: " mount_input
 
     mount_input=$(echo "$mount_input" | tr -d '[:space:]')
 
@@ -966,7 +949,7 @@ set_storage_mount_path() {
     echo "  挂载点：${mount_input}"
     echo "  实际路径：${upload_path}"
     echo ""
-    read -r -p "确认配置？(y/n): " confirm
+    read -e -p "确认配置？(y/n): " confirm
 
     if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
         warn "已取消配置"
@@ -1012,7 +995,7 @@ setup_storage_path_and_check() {
         printf "${CYAN}[2]${NC} 检测连通性\n"
         printf "${RED}[0]${NC} 返回主菜单\n"
         printf "================================\n"
-        read -r -p "请选择: " sub_choice
+        read -e -p "请选择: " sub_choice
         echo
 
         case "${sub_choice:-}" in
@@ -1040,7 +1023,7 @@ switch_storage_backend_menu() {
         echo "  3 = 切换到 rclone"
         echo "  4 = 切换到本地目录"
         echo "  0 = 返回主菜单"
-        read -r -p "请选择 [1/2/3/4/0]: " storage_choice
+        read -e -p "请选择 [1/2/3/4/0]: " storage_choice
 
         case "${storage_choice:-0}" in
             1)
@@ -1092,8 +1075,8 @@ switch_to_rclone_storage() {
 
     info "检测到 ${RCLONE_MOUNT} 已挂载"
 
-    local RCLONE_UPLOAD_ROOT="${RCLONE_MOUNT}/ism_images"
-    mkdir -p "$RCLONE_UPLOAD_ROOT/assets" "$RCLONE_UPLOAD_ROOT/accessories" "$RCLONE_UPLOAD_ROOT/sql_backups"
+    local RCLONE_UPLOAD_ROOT="${RCLONE_MOUNT}"
+    mkdir -p "$RCLONE_UPLOAD_ROOT"
 
     if [ -f "${APP_ROOT}/config.yaml" ]; then
         cp -f "${APP_ROOT}/config.yaml" "${APP_ROOT}/config.yaml.bak_rclone_$(date +%Y%m%d_%H%M%S)"
@@ -1127,7 +1110,7 @@ switch_to_clouddrive_storage() {
     echo "菜单 6 -> CloudDrive：设置系统写入路径"
     echo "CloudDrive 实际挂载根目录：${CD_MOUNT_DIR}"
     echo
-    read -r -p "请输入 CloudDrive 现有本地目录（回车默认 ${CD_MOUNT_DIR}/ism_images）: " input_clouddrive_path
+    read -e -p "请输入 CloudDrive 现有本地目录（回车默认 ${CD_MOUNT_DIR}/ism_images）: " input_clouddrive_path
     normalize_clouddrive_source "${input_clouddrive_path:-${CLOUDDRIVE_SOURCE:-${CD_MOUNT_DIR}/ism_images}}"
 
     if [ "${CLOUDDRIVE_SOURCE}" = "${DAV_UPLOAD_ROOT}" ]; then
@@ -1187,7 +1170,7 @@ switch_storage_backend_menu() {
         echo "  3 = 切换到 rclone"
         echo "  4 = 切换到本地目录"
         echo "  0 = 返回主菜单"
-        read -r -p "请选择 [1/2/3/4/0]: " storage_choice
+        read -e -p "请选择 [1/2/3/4/0]: " storage_choice
 
         case "${storage_choice:-0}" in
             1)
@@ -1451,7 +1434,7 @@ manage_clouddrive_menu() {
         echo "  2 = 恢复 CloudDrive 挂载"
         echo "  3 = 查看 CloudDrive 状态"
         echo "  0 = 返回主菜单"
-        read -r -p "请选择 [1/2/3/0]: " cd_choice
+        read -e -p "请选择 [1/2/3/0]: " cd_choice
 
         case "${cd_choice:-0}" in
             1)
@@ -1518,7 +1501,7 @@ uninstall_clouddrive_app() {
     warn "该操作会卸载 CloudDrive，并清理本脚本创建的服务与程序文件。"
     warn "不会删除 ${CD_MOUNT_DIR} 文件夹。"
     warn "如果当前写入路径正在使用 CloudDrive，会先恢复为本地目录。"
-    read -r -p "输入 YES 确认继续： " confirm_text
+    read -e -p "输入 YES 确认继续： " confirm_text
 
     if [ "${confirm_text:-}" != "YES" ]; then
         warn "已取消卸载"
@@ -1680,7 +1663,7 @@ restore_database() {
     fi
 
     warn "即将使用备份文件恢复数据库：$BACKUP_FILE"
-    read -r -p "输入 YES 确认恢复： " confirm_text
+    read -e -p "输入 YES 确认恢复： " confirm_text
     if [ "${confirm_text:-}" != "YES" ]; then
         warn "已取消恢复"
         return 0
@@ -1697,7 +1680,7 @@ uninstall_webdav() {
 
     warn "该操作会卸载本机 WebDAV 挂载，并把程序图片目录切回本地：${LOCAL_UPLOAD_ROOT}"
     warn "不会删除你在云盘上已存在的业务文件"
-    read -r -p "输入 YES 确认卸载 WebDAV: " confirm_text
+    read -e -p "输入 YES 确认卸载 WebDAV: " confirm_text
     if [ "${confirm_text:-}" != "YES" ]; then
         warn "已取消卸载"
         return 0
@@ -1754,7 +1737,7 @@ uninstall_system() {
     warn "  6. 清理状态文件"
     warn ""
     warn "不会影响：nginx / MariaDB / CloudDrive 等现有业务"
-    read -r -p "输入 YES 确认卸载: " confirm_text
+    read -e -p "输入 YES 确认卸载: " confirm_text
     if [ "${confirm_text:-}" != "YES" ]; then
         warn "已取消卸载"
         return 0
@@ -1880,12 +1863,12 @@ confirm_install_asset_system() {
         echo "  当前用户名: $existing_user"
         echo "  当前密码: $existing_pass"
         echo
-        read -r -p "新用户名 (回车保留现有: $existing_user): " ADMIN_USER
+        read -e -p "新用户名 (回车保留现有: $existing_user): " ADMIN_USER
         if [ -z "$ADMIN_USER" ]; then
             ADMIN_USER="$existing_user"
         fi
 
-        read -r -p "新密码 (回车保留现有: $existing_pass): " ADMIN_PASS
+        read -e -p "新密码 (回车保留现有: $existing_pass): " ADMIN_PASS
         if [ -z "$ADMIN_PASS" ]; then
             ADMIN_PASS="$existing_pass"
         fi
@@ -1893,14 +1876,14 @@ confirm_install_asset_system() {
         echo "请设置管理员账号和密码（明文保存到 /root/ism/config.yaml）："
         echo
         while [ -z "$ADMIN_USER" ]; do
-            read -r -p "管理员用户名: " ADMIN_USER
+            read -e -p "管理员用户名: " ADMIN_USER
             if [ -z "$ADMIN_USER" ]; then
                 warn "用户名不能为空，请重新输入"
             fi
         done
 
         while [ -z "$ADMIN_PASS" ]; do
-            read -r -p "管理员密码: " ADMIN_PASS
+            read -e -p "管理员密码: " ADMIN_PASS
             if [ -z "$ADMIN_PASS" ]; then
                 warn "密码不能为空，请重新输入"
             elif [ ${#ADMIN_PASS} -lt 6 ]; then
@@ -1911,7 +1894,7 @@ confirm_install_asset_system() {
     fi
 
     echo
-    read -r -p "确认安装吗？输入 YES 继续，其他任意键取消: " confirm_install
+    read -e -p "确认安装吗？输入 YES 继续，其他任意键取消: " confirm_install
 
     case "${confirm_install:-n}" in
         YES)
@@ -2239,7 +2222,7 @@ update_domain() {
 
     local new_domain=""
     while [ -z "$new_domain" ]; do
-        read -rp "请输入新域名（留空则关闭 HTTPS 并回退到 HTTP）: " new_domain
+        read -e -p "请输入新域名（留空则关闭 HTTPS 并回退到 HTTP）: " new_domain
         new_domain="$(echo "$new_domain" | tr -d '[:space:]')"
     done
 
@@ -2405,15 +2388,15 @@ show_menu() {
     printf "${BOLD}${BLUE}-------------------------------------------------------------------------${NC}\n"
 
     printf "${BOLD}${CYAN} [3] 重启系统${NC}              ${WHITE}重启 ism 服务${NC}\n"
-    printf "${BOLD}${CYAN} [6] 存储路径设置${NC}          ${WHITE}设置挂载路径并检测连通性${NC}\n"
-    printf "${BOLD}${YELLOW} [8] 数据库备份（cron）${NC}      ${WHITE}生成、查看、删除数据库备份 cron${NC}\n"
-    printf "${BOLD}${MAGENTA} [9] 恢复数据库 ${NC}            ${WHITE}从本地最新备份恢复数据库${NC}\n"
-	printf "${BOLD}${GREEN} [10] 更新域名${NC}        ${WHITE}更换域名并自动申请/更新 Let's Encrypt 证书${NC}\n"
-    printf "${BOLD}${RED} [11] 卸载系统${NC}              ${YELLOW}卸载整个 ISM 系统（保留 nginx/MariaDB）${NC}\n"
+    printf "${BOLD}${CYAN} [4] 存储路径设置${NC}          ${WHITE}设置挂载路径并检测连通性${NC}\n"
+    printf "${BOLD}${YELLOW} [5] 数据库备份（cron）${NC}      ${WHITE}生成、查看、删除数据库备份 cron${NC}\n"
+    printf "${BOLD}${MAGENTA} [6] 恢复数据库 ${NC}            ${WHITE}从本地最新备份恢复数据库${NC}\n"
+    printf "${BOLD}${GREEN} [7] 更新域名${NC}              ${WHITE}更换域名并自动申请/更新 Let's Encrypt 证书${NC}\n"
+    printf "${BOLD}${RED} [8] 卸载系统${NC}              ${YELLOW}卸载整个 ISM 系统（保留 nginx/MariaDB）${NC}\n"
     printf "${BOLD}${RED} [0] 退出${NC}                  ${WHITE}退出当前脚本${NC}\n"
 
     printf "${BOLD}${BLUE}-------------------------------------------------------------------------${NC}\n"
-    printf "${BOLD}${YELLOW} ★ 推荐顺序：${NC}${GREEN}1 -> 2 -> 6 -> 8${NC}\n"
+    printf "${BOLD}${YELLOW} ★ 推荐顺序：${NC}${GREEN}1 -> 2 -> 4 -> 5${NC}\n"
     printf "${BOLD}${CYAN} ★ 说明：${NC}${WHITE}存储挂载由独立脚本 mount.sh 管理${NC}\n"
     printf "${BOLD}${BLUE}=========================================================================${NC}\n"
     printf "\n"
@@ -2427,17 +2410,17 @@ main() {
     while true; do
         local_need_pause=1
         show_menu
-        read -r -p "请输入菜单编号: " choice
+        read -e -p "请输入菜单编号: " choice
         echo
         case "${choice:-}" in
             1) install_dependencies ;;
             2) confirm_install_asset_system ;;
             3) restart_service ;;
-            6) setup_storage_path_and_check ;;
-            8) setup_backup; local_need_pause=0 ;;
-            9) restore_database ;;
-            10) update_domain ;;
-            11) uninstall_system ;;
+            4) setup_storage_path_and_check ;;
+            5) setup_backup; local_need_pause=0 ;;
+            6) restore_database ;;
+            7) update_domain ;;
+            8) uninstall_system ;;
             0) exit 0 ;;
             *) warn "无效选项" ;;
         esac
