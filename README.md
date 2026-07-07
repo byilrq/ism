@@ -9,6 +9,7 @@
 9. 数据库按照仓库的 ism.sql   初始化初步数据和用户名。
 10. 切换到 WebDAV 或 CloudDrive，脚本会把 config.py 里的 UPLOAD_FOLDER 改成对应挂载目录；但数据库本体仍然在本机 MariaDB，只是备份和图片会按你选择的存储方式同步/写入。
 11. 1.0版本是 架构没有拆分前的完全版本，2.0是架构拆分后的。
+12. mount.sh是挂载工具。3种方式。webdav、clouddrive、rclone.
    
 
 
