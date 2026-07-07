@@ -1538,8 +1538,16 @@ write_backup_script() {
 
 install_backup_cron() {
     if [ ! -f "$BACKUP_SCRIPT" ]; then
-        warn "未找到备份脚本：$BACKUP_SCRIPT，正在按当前配置自动重建"
-        write_backup_script
+        info "备份脚本不存在，正在从 GitHub 下载..."
+
+        local backup_script_url="https://raw.githubusercontent.com/byilrq/ism/main/ism_backup.sh"
+        if curl -fsSL --retry 3 "$backup_script_url" -o "$BACKUP_SCRIPT" 2>/dev/null; then
+            chmod +x "$BACKUP_SCRIPT"
+            ok "备份脚本已下载：$BACKUP_SCRIPT"
+        else
+            err "下载备份脚本失败，请检查网络连接"
+            return 1
+        fi
     fi
 
     info "生成 cron 自动备份任务"
