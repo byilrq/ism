@@ -1003,6 +1003,32 @@ set_storage_mount_path() {
     echo "备份脚本已更新：$BACKUP_SCRIPT"
 }
 
+setup_storage_path_and_check() {
+    while true; do
+        clear
+        printf "\n${BOLD}${CYAN}存储路径设置菜单${NC}\n"
+        printf "================================\n"
+        printf "${GREEN}[1]${NC} 设置存储路径\n"
+        printf "${CYAN}[2]${NC} 检测连通性\n"
+        printf "${RED}[0]${NC} 返回主菜单\n"
+        printf "================================\n"
+        read -r -p "请选择: " sub_choice
+        echo
+
+        case "${sub_choice:-}" in
+            1) set_storage_mount_path ;;
+            2) check_connectivity ;;
+            0) break ;;
+            *) warn "无效选项" ;;
+        esac
+
+        if [ "${sub_choice:-}" != "0" ]; then
+            echo
+            read -r -p "按回车继续..." _
+        fi
+    done
+}
+
 switch_storage_backend_menu() {
     load_state
     ensure_state_defaults
@@ -2379,16 +2405,15 @@ show_menu() {
     printf "${BOLD}${BLUE}-------------------------------------------------------------------------${NC}\n"
 
     printf "${BOLD}${CYAN} [3] 重启系统${NC}              ${WHITE}重启 ism 服务${NC}\n"
-    printf "${BOLD}${CYAN} [6] 设置存储路径${NC}     ${WHITE}手动输入挂载路径（如 /mnt/mount）${NC}\n"
-    printf "${BOLD}${YELLOW} [7] 连通性检测${NC}           ${WHITE}检测挂载、目录、写入是否正常${NC}\n"
-    printf "${BOLD}${YELLOW} [8] 管理cron备份任务${NC}      ${WHITE}生成、查看、删除数据库备份 cron${NC}\n"
-    printf "${BOLD}${MAGENTA} [9] 恢复数据库${NC}            ${WHITE}从本地最新备份恢复数据库${NC}\n"
-	printf "${BOLD}${GREEN} [10] 更新域名/HTTPS${NC}        ${WHITE}更换域名并自动申请/更新 Let's Encrypt 证书${NC}\n"
+    printf "${BOLD}${CYAN} [6] 存储路径设置${NC}          ${WHITE}设置挂载路径并检测连通性${NC}\n"
+    printf "${BOLD}${YELLOW} [8] 数据库备份（cron）${NC}      ${WHITE}生成、查看、删除数据库备份 cron${NC}\n"
+    printf "${BOLD}${MAGENTA} [9] 恢复数据库 ${NC}            ${WHITE}从本地最新备份恢复数据库${NC}\n"
+	printf "${BOLD}${GREEN} [10] 更新域名${NC}        ${WHITE}更换域名并自动申请/更新 Let's Encrypt 证书${NC}\n"
     printf "${BOLD}${RED} [11] 卸载系统${NC}              ${YELLOW}卸载整个 ISM 系统（保留 nginx/MariaDB）${NC}\n"
     printf "${BOLD}${RED} [0] 退出${NC}                  ${WHITE}退出当前脚本${NC}\n"
 
     printf "${BOLD}${BLUE}-------------------------------------------------------------------------${NC}\n"
-    printf "${BOLD}${YELLOW} ★ 推荐顺序：${NC}${GREEN}1 -> 2 -> 6 -> 7 -> 8${NC}\n"
+    printf "${BOLD}${YELLOW} ★ 推荐顺序：${NC}${GREEN}1 -> 2 -> 6 -> 8${NC}\n"
     printf "${BOLD}${CYAN} ★ 说明：${NC}${WHITE}存储挂载由独立脚本 mount.sh 管理${NC}\n"
     printf "${BOLD}${BLUE}=========================================================================${NC}\n"
     printf "\n"
@@ -2408,8 +2433,7 @@ main() {
             1) install_dependencies ;;
             2) confirm_install_asset_system ;;
             3) restart_service ;;
-            6) set_storage_mount_path ;;
-            7) check_connectivity ;;
+            6) setup_storage_path_and_check ;;
             8) setup_backup; local_need_pause=0 ;;
             9) restore_database ;;
             10) update_domain ;;
