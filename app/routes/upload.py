@@ -3,8 +3,10 @@
 from datetime import datetime, date
 from io import BytesIO
 import os
+import random
 import re
 import shutil
+import string
 import uuid
 
 from flask import request, redirect, url_for, send_from_directory, abort, current_app
@@ -151,7 +153,7 @@ def save_uploaded_image(file_storage, subdir, filename_prefix="asset"):
         return None
     ext = file_storage.filename.rsplit(".", 1)[1].lower()
     date_part = datetime.now().strftime("%Y.%m.%d")
-    random_part = uuid.uuid4().hex[:16]
+    random_part = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
     safe_prefix = sanitize_image_prefix(filename_prefix)
     filename = f"{safe_prefix}.{date_part}.{random_part}.{ext}"
     folder = os.path.join(Config.UPLOAD_FOLDER, subdir)
