@@ -9,7 +9,7 @@ import yaml
 
 from flask import request, redirect, url_for, render_template, render_template_string, send_file, session, jsonify
 from flask_login import login_user, logout_user, login_required, current_user
-from sqlalchemy import or_, func
+from sqlalchemy import or_, func, and_
 from openpyxl import Workbook
 from app.models import (
     User, Asset, Accessory, DictOption,
@@ -24,7 +24,7 @@ except ImportError:
     from cable import register_cable_routes, Cable
     from debug import register_debug_routes
 
-from .upload import register_upload_routes, AssetLocationImage, delete_image_file, save_uploaded_image, trim_asset_images, trim_accessory_images, trim_asset_location_images, get_asset_location_images, delete_accessory_with_files, delete_asset_with_files, build_image_filename_prefix, sanitize_image_prefix
+from .upload import register_upload_routes, AssetLocationImage, delete_image_file, save_uploaded_image, trim_asset_images, trim_accessory_images, trim_asset_location_images, get_asset_location_images, delete_accessory_with_files, delete_asset_with_files, build_image_filename_prefix, sanitize_image_prefix, restore_asset, restore_accessory, permanent_delete_asset, permanent_delete_accessory
 
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
@@ -79,7 +79,7 @@ def get_statuses():
     seen = set()
     for row in rows:
         status_value = normalize_status_value(getattr(row, "dict_value", ""))
-        if not status_value or status_value in seen:
+        if not status_value or status_value in seen or status_value == "已删除":
             continue
         status_items.append(SimpleNamespace(dict_value=status_value))
         seen.add(status_value)
@@ -337,7 +337,7 @@ def get_asset_related_accessories(asset):
 
     accessory_map = {}
 
-    for item in Accessory.query.filter_by(parent_asset_id=asset.id).all():
+    for item in Accessory.query.filter(Accessory.parent_asset_id == asset.id, Accessory.deleted_at.is_(None)).all():
         accessory_map[item.id] = item
 
     conditions = []
@@ -349,7 +349,8 @@ def get_asset_related_accessories(asset):
     if conditions:
         standalone_items = Accessory.query.filter(
             Accessory.parent_asset_id.is_(None),
-            or_(*conditions)
+            or_(*conditions),
+            Accessory.deleted_at.is_(None)
         ).all()
         for item in standalone_items:
             accessory_map[item.id] = item
@@ -394,19 +395,6 @@ def ensure_manage_access():
     return redirect(url_for("login"))
 
 
-def delete_asset_with_files(asset):
-    if not asset:
-        return
-    accessories = get_asset_related_accessories(asset)
-    for accessory in accessories:
-        delete_accessory_with_files(accessory)
-    from .upload import permanent_delete_image_file
-    for img in AssetImage.query.filter_by(asset_id=asset.id).all():
-        delete_image_file(img.image_path)
-    db.session.delete(asset)
-
-
-
 def build_search_rows(keyword="", searched=False):
     if not searched:
         return []
@@ -415,8 +403,8 @@ def build_search_rows(keyword="", searched=False):
     rows = []
 
     if not keyword:
-        asset_rows = sorted(Asset.query.all(), key=get_asset_sort_key)
-        accessory_rows = Accessory.query.all()
+        asset_rows = sorted(Asset.query.filter(Asset.deleted_at.is_(None)).all(), key=get_asset_sort_key)
+        accessory_rows = Accessory.query.filter(Accessory.deleted_at.is_(None)).all()
         appended_accessory_ids = set()
 
         for item in asset_rows:
@@ -490,18 +478,24 @@ def build_search_rows(keyword="", searched=False):
     suffix_keyword = "" if is_precise_group_keyword else (keyword[-6:] if len(keyword) >= 6 else "")
 
     exact_assets = Asset.query.filter(
-        or_(
-            Asset.internal_no == keyword,
-            Asset.group_no == keyword
+        and_(
+            or_(
+                Asset.internal_no == keyword,
+                Asset.group_no == keyword
+            ),
+            Asset.deleted_at.is_(None)
         )
     ).order_by(Asset.internal_no.asc()).all()
 
     suffix_assets = []
     if suffix_keyword:
         suffix_assets = Asset.query.filter(
-            or_(
-                Asset.internal_no.like(f"%{suffix_keyword}"),
-                Asset.group_no.like(f"%{suffix_keyword}")
+            and_(
+                or_(
+                    Asset.internal_no.like(f"%{suffix_keyword}"),
+                    Asset.group_no.like(f"%{suffix_keyword}")
+                ),
+                Asset.deleted_at.is_(None)
             )
         ).order_by(Asset.internal_no.asc()).all()
 
@@ -525,25 +519,31 @@ def build_search_rows(keyword="", searched=False):
 
     owner_assets = []
     if owner_asset_conditions:
-        owner_assets = Asset.query.filter(or_(*owner_asset_conditions)).order_by(Asset.internal_no.asc()).all()
+        owner_assets = Asset.query.filter(and_(or_(*owner_asset_conditions), Asset.deleted_at.is_(None))).order_by(Asset.internal_no.asc()).all()
 
     for a in owner_assets:
         if a.id not in asset_ids:
             asset_ids.append(a.id)
 
     exact_accessories = Accessory.query.filter(
-        or_(
-            Accessory.sub_internal_no == keyword,
-            Accessory.sub_group_no == keyword
+        and_(
+            or_(
+                Accessory.sub_internal_no == keyword,
+                Accessory.sub_group_no == keyword
+            ),
+            Accessory.deleted_at.is_(None)
         )
     ).all()
 
     suffix_accessories = []
     if suffix_keyword:
         suffix_accessories = Accessory.query.filter(
-            or_(
-                Accessory.sub_internal_no.like(f"%{suffix_keyword}"),
-                Accessory.sub_group_no.like(f"%{suffix_keyword}-%")
+            and_(
+                or_(
+                    Accessory.sub_internal_no.like(f"%{suffix_keyword}"),
+                    Accessory.sub_group_no.like(f"%{suffix_keyword}-%")
+                ),
+                Accessory.deleted_at.is_(None)
             )
         ).all()
 
@@ -559,16 +559,19 @@ def build_search_rows(keyword="", searched=False):
 
     owner_accessories = []
     if owner_accessory_conditions:
-        owner_accessories = Accessory.query.filter(or_(*owner_accessory_conditions)).all()
+        owner_accessories = Accessory.query.filter(and_(or_(*owner_accessory_conditions), Accessory.deleted_at.is_(None))).all()
 
     for acc in exact_accessories + suffix_accessories + owner_accessories:
         if acc.parent_asset_id and acc.parent_asset_id not in asset_ids:
             asset_ids.append(acc.parent_asset_id)
 
     fuzzy_accessories = Accessory.query.filter(
-        or_(
-            Accessory.sub_internal_no.like(f"{keyword}-%"),
-            Accessory.sub_group_no.like(f"{keyword}-%")
+        and_(
+            or_(
+                Accessory.sub_internal_no.like(f"{keyword}-%"),
+                Accessory.sub_group_no.like(f"{keyword}-%")
+            ),
+            Accessory.deleted_at.is_(None)
         )
     ).all()
 
@@ -2063,6 +2066,116 @@ def register_routes(app):
         except Exception as e:
             db.session.rollback()
             return f"删除失败：{str(e)}"
+
+    @app.route("/recycle_bin", methods=["GET"])
+    def recycle_bin():
+        guard = ensure_manage_access()
+        if guard:
+            return guard
+
+        from datetime import datetime, timedelta
+        cutoff_time = datetime.now() - timedelta(days=30)
+
+        deleted_assets = Asset.query.filter(and_(Asset.deleted_at.isnot(None), Asset.status == "已删除")).all()
+        for asset in deleted_assets:
+            if asset.deleted_at < cutoff_time:
+                try:
+                    permanent_delete_asset(asset)
+                except Exception as e:
+                    print(f"[ERR] 删除资产 {asset.id} 失败: {str(e)}")
+
+        deleted_accessories = Accessory.query.filter(and_(Accessory.deleted_at.isnot(None), Accessory.status == "已删除")).all()
+        for accessory in deleted_accessories:
+            if accessory.deleted_at < cutoff_time:
+                try:
+                    permanent_delete_accessory(accessory)
+                except Exception as e:
+                    print(f"[ERR] 删除配件 {accessory.id} 失败: {str(e)}")
+
+        db.session.commit()
+
+        deleted_assets = Asset.query.filter(and_(Asset.deleted_at.isnot(None), Asset.status == "已删除")).order_by(Asset.deleted_at.desc()).all()
+        deleted_accessories = Accessory.query.filter(and_(Accessory.deleted_at.isnot(None), Accessory.status == "已删除")).order_by(Accessory.deleted_at.desc()).all()
+        return render_template(
+            "recycle.html",
+            current_user=current_user,
+            can_manage=has_manage_access(),
+            user_display=get_user_display_name(),
+            deleted_assets=deleted_assets,
+            deleted_accessories=deleted_accessories
+        )
+
+    @app.route("/asset/<int:asset_id>/restore", methods=["POST"])
+    def restore_asset_route(asset_id):
+        guard = ensure_manage_access()
+        if guard:
+            return guard
+        asset = Asset.query.get_or_404(asset_id)
+        try:
+            restore_asset(asset)
+            for accessory in Accessory.query.filter_by(parent_asset_id=asset.id, status="已删除").all():
+                restore_accessory(accessory)
+            db.session.commit()
+            return redirect(url_for("recycle_bin"))
+        except Exception as e:
+            db.session.rollback()
+            return f"恢复失败：{str(e)}"
+
+    @app.route("/accessory/<int:accessory_id>/restore", methods=["POST"])
+    def restore_accessory_route(accessory_id):
+        guard = ensure_manage_access()
+        if guard:
+            return guard
+        accessory = Accessory.query.get_or_404(accessory_id)
+        try:
+            restore_accessory(accessory)
+            db.session.commit()
+            return redirect(url_for("recycle_bin"))
+        except Exception as e:
+            db.session.rollback()
+            return f"恢复失败：{str(e)}"
+
+    @app.route("/recycle/permanent-delete", methods=["POST"])
+    def permanent_delete_selected():
+        guard = ensure_manage_access()
+        if guard:
+            return guard
+
+        import json
+        selected_items_json = request.form.get("selected_items", "[]")
+        delete_pin = normalize_text(request.form.get("delete_pin"))
+
+        if delete_pin != "0819":
+            return redirect(url_for("recycle_bin"))
+
+        try:
+            selected_items = json.loads(selected_items_json)
+        except:
+            return redirect(url_for("recycle_bin"))
+
+        try:
+            for item in selected_items:
+                try:
+                    row_type, row_id = item.split(":")
+                    row_id = int(row_id)
+                except:
+                    continue
+
+                if row_type == "asset":
+                    asset = Asset.query.get(row_id)
+                    if asset:
+                        permanent_delete_asset(asset)
+                elif row_type == "accessory":
+                    accessory = Accessory.query.get(row_id)
+                    if accessory:
+                        permanent_delete_accessory(accessory)
+
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            return f"删除失败：{str(e)}"
+
+        return redirect(url_for("recycle_bin"))
 
     @app.route("/accessory/<int:accessory_id>", methods=["GET", "POST"])
     def accessory_detail(accessory_id):

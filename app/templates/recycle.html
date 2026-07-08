@@ -1,0 +1,245 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>回收站</title>
+<style>
+:root{--bg:#edf1f5;--card:#ffffff;--line:#d9e1ea;--text:#233243;--muted:#677383;--primary:#5f6f82;--primary-soft:#eef2f6;--green:#2f7d67;--green-soft:#edf7f2;--orange:#b88347;--orange-soft:#faf2e8;--purple-soft:#f2eff7;}
+*{box-sizing:border-box;}
+body{font-family:Arial,sans-serif;margin:0;color:var(--text);background:linear-gradient(180deg,#edf1f5 0%,#f7f8fa 34%,#f1f4f8 100%);}
+.wrap{max-width:1240px;margin:auto;padding:18px 14px 26px;}
+.card{background:rgba(255,255,255,.94);border:1px solid rgba(210,218,227,.98);border-radius:22px;padding:18px 18px 16px;margin-bottom:16px;box-shadow:0 16px 40px rgba(27,39,53,.07);backdrop-filter:blur(10px);}
+.topbar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:18px;}
+h2{margin:0 0 14px;font-size:26px;color:#263646;letter-spacing:.4px;}
+a{color:#5a6675;text-decoration:none;}
+a:hover{color:#3a4455;}
+button{padding:11px 12px;font-size:16px;border-radius:12px;border:1px solid #cfd6df;background:linear-gradient(135deg,#718194 0%,#556274 100%);color:#fff;cursor:pointer;font-weight:700;box-shadow:0 8px 18px rgba(46,58,74,.14);}
+button:hover{transform:translateY(-1px);box-shadow:0 12px 22px rgba(46,58,74,.16);}
+.btn-back{background:linear-gradient(135deg,#8b95a1 0%,#697380 100%);}
+.btn-restore{background:linear-gradient(135deg,#54ddb1 0%,#159f76 100%);padding:8px 12px;font-size:14px;}
+.btn-restore:hover{background:linear-gradient(135deg,#64e4ba 0%,#0f956d 100%);}
+.btn-delete{background:linear-gradient(135deg,#d06f72 0%,#b34f55 100%);padding:8px 12px;font-size:14px;margin-top:10px;}
+.btn-delete:hover{background:linear-gradient(135deg,#da7f82 0%,#c25f65 100%);}
+.btn-delete:disabled{opacity:0.5;cursor:not-allowed;}
+.action-bar{display:flex;gap:10px;margin-bottom:16px;align-items:center;}
+.table-wrap{overflow-x:auto;border:1px solid #d7dee7;border-radius:16px;background:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.8),0 8px 22px rgba(27,39,53,.04);margin-bottom:16px;}
+table{width:100%;border-collapse:separate;border-spacing:0;min-width:940px;}
+th,td{padding:11px 10px;text-align:left;border:none;border-right:1px solid #e7eef7;border-bottom:1px solid #e7eef7;vertical-align:middle;font-size:15px;font-weight:400;color:#6f7b88;}
+th:last-child,td:last-child{border-right:none;}
+th:first-child,td:first-child{text-align:center;width:50px;}
+thead th{position:sticky;top:0;z-index:1;background:linear-gradient(180deg,#fafbfd 0%,#eff2f6 100%);color:#5e6977;font-weight:600;white-space:nowrap;text-align:center;}
+tbody tr:last-child td{border-bottom:none;}
+tbody tr{transition:transform .16s ease,box-shadow .16s ease;}
+tbody tr td:first-child{border-left:4px solid transparent;}
+tbody tr:nth-child(4n+1) td{background:#fbfcfd;}
+tbody tr:nth-child(4n+2) td{background:#f8fafb;}
+tbody tr:nth-child(4n+3) td{background:#fcfbf8;}
+tbody tr:hover{background-color:#f5f8fc !important;}
+input[type=checkbox]{accent-color:#5f6f82;width:16px;height:16px;cursor:pointer;}
+.empty-msg{text-align:center;color:#999;padding:40px 20px;font-size:16px;}
+form{display:inline;}
+.section-title{font-size:18px;font-weight:600;color:#263646;margin-top:24px;margin-bottom:12px;padding-top:16px;border-top:2px solid #e7eef7;}
+.modal-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;}
+.modal-overlay.show{display:flex;}
+.modal-dialog{background:#fff;border-radius:16px;padding:32px;box-shadow:0 20px 60px rgba(0,0,0,.2);max-width:400px;width:90%;text-align:center;}
+.modal-dialog h3{margin:0 0 16px;font-size:18px;color:#263646;}
+.modal-dialog p{margin:0 0 24px;color:#677383;line-height:1.5;}
+.modal-dialog .pin-input{width:100%;padding:12px;font-size:16px;border:1px solid #cfd6df;border-radius:8px;margin-bottom:16px;box-sizing:border-box;}
+.modal-dialog .btn-group{display:flex;gap:12px;}
+.modal-dialog .btn-cancel{background:linear-gradient(135deg,#8b95a1 0%,#697380 100%);flex:1;}
+.modal-dialog .btn-confirm{background:linear-gradient(135deg,#d06f72 0%,#b34f55 100%);flex:1;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <h2>📋 回收站（30天可恢复）</h2>
+    <a href="/" style="color:#5a6675;"><button class="btn-back">返回</button></a>
+  </div>
+
+  {% if deleted_assets or deleted_accessories %}
+  <form id="recycle-delete-form" method="POST" action="/recycle/permanent-delete" style="display:none;">
+    <input type="hidden" name="selected_items" id="selected-items-input" value="">
+    <input type="hidden" name="delete_pin" id="delete-pin-input" value="">
+  </form>
+  {% endif %}
+
+  {% if deleted_assets %}
+  <div class="card">
+    <h3 class="section-title">已删除的主设备</h3>
+    <div class="action-bar">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input type="checkbox" id="select-all-assets" onchange="toggleAssetSelection(this)"> 全选
+      </label>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th><input type="checkbox" id="master-asset-checkbox" onchange="toggleAssetSelection(this)"></th>
+            <th>集团编号</th>
+            <th>内部编号</th>
+            <th>名称</th>
+            <th>删除时间</th>
+            <th style="text-align:center;width:120px;">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for asset in deleted_assets %}
+          <tr>
+            <td><input type="checkbox" class="asset-checkbox" value="asset:{{ asset.id }}"></td>
+            <td>{{ asset.group_no or '-' }}</td>
+            <td>{{ asset.internal_no or '-' }}</td>
+            <td>{{ asset.name }}</td>
+            <td>{{ asset.deleted_at.strftime('%Y.%m.%d %H:%M') if asset.deleted_at else '-' }}</td>
+            <td style="text-align:center;">
+              <form method="POST" action="/asset/{{ asset.id }}/restore">
+                <button class="btn-restore" type="submit">恢复</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="card">
+    <h3 class="section-title">已删除的主设备</h3>
+    <div class="empty-msg">暂无已删除的主设备</div>
+  </div>
+  {% endif %}
+
+  {% if deleted_accessories %}
+  <div class="card">
+    <h3 class="section-title">已删除的配件</h3>
+    <div class="action-bar">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input type="checkbox" id="select-all-accessories" onchange="toggleAccessorySelection(this)"> 全选
+      </label>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th><input type="checkbox" id="master-accessory-checkbox" onchange="toggleAccessorySelection(this)"></th>
+            <th>集团编号</th>
+            <th>内部编号</th>
+            <th>名称</th>
+            <th>删除时间</th>
+            <th style="text-align:center;width:120px;">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for accessory in deleted_accessories %}
+          <tr>
+            <td><input type="checkbox" class="accessory-checkbox" value="accessory:{{ accessory.id }}"></td>
+            <td>{{ accessory.sub_group_no or '-' }}</td>
+            <td>{{ accessory.sub_internal_no or '-' }}</td>
+            <td>{{ accessory.name }}</td>
+            <td>{{ accessory.deleted_at.strftime('%Y.%m.%d %H:%M') if accessory.deleted_at else '-' }}</td>
+            <td style="text-align:center;">
+              <form method="POST" action="/accessory/{{ accessory.id }}/restore">
+                <button class="btn-restore" type="submit">恢复</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="card">
+    <h3 class="section-title">已删除的配件</h3>
+    <div class="empty-msg">暂无已删除的配件</div>
+  </div>
+  {% endif %}
+
+  {% if deleted_assets or deleted_accessories %}
+  <div class="card" style="text-align:center;">
+    <button class="btn-delete" onclick="permanentDelete()" id="delete-selected-btn" disabled style="min-width:200px;">彻底删除选中</button>
+  </div>
+  {% endif %}
+
+  <div id="delete-modal" class="modal-overlay">
+    <div class="modal-dialog">
+      <h3>确认彻底删除</h3>
+      <p id="delete-message"></p>
+      <input type="password" id="pin-input" class="pin-input" placeholder="请输入删除码（Pin码）" style="display:none;">
+      <div class="btn-group">
+        <button class="btn-delete btn-cancel" onclick="cancelDelete()">取消</button>
+        <button class="btn-delete btn-confirm" onclick="confirmDelete()">删除</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let selectedItemsToDelete = [];
+
+function toggleAssetSelection(checkbox) {
+  const assetCheckboxes = document.querySelectorAll('.asset-checkbox');
+  assetCheckboxes.forEach(cb => cb.checked = checkbox.checked);
+  updateDeleteButton();
+}
+
+function toggleAccessorySelection(checkbox) {
+  const accessoryCheckboxes = document.querySelectorAll('.accessory-checkbox');
+  accessoryCheckboxes.forEach(cb => cb.checked = checkbox.checked);
+  updateDeleteButton();
+}
+
+function updateDeleteButton() {
+  const assetCheckboxes = document.querySelectorAll('.asset-checkbox:checked');
+  const accessoryCheckboxes = document.querySelectorAll('.accessory-checkbox:checked');
+  const deleteBtn = document.getElementById('delete-selected-btn');
+  deleteBtn.disabled = assetCheckboxes.length === 0 && accessoryCheckboxes.length === 0;
+}
+
+function permanentDelete() {
+  const assetCheckboxes = document.querySelectorAll('.asset-checkbox:checked');
+  const accessoryCheckboxes = document.querySelectorAll('.accessory-checkbox:checked');
+
+  if (assetCheckboxes.length === 0 && accessoryCheckboxes.length === 0) {
+    alert('请先选择要删除的项');
+    return;
+  }
+
+  selectedItemsToDelete = [];
+  assetCheckboxes.forEach(cb => selectedItemsToDelete.push(cb.value));
+  accessoryCheckboxes.forEach(cb => selectedItemsToDelete.push(cb.value));
+
+  const message = `确认要彻底删除选中的 ${assetCheckboxes.length} 个设备和 ${accessoryCheckboxes.length} 个配件吗？\n这将永久删除，无法恢复！`;
+  document.getElementById('delete-message').textContent = message;
+  document.getElementById('pin-input').value = '';
+  document.getElementById('pin-input').style.display = 'block';
+  document.getElementById('delete-modal').classList.add('show');
+}
+
+function cancelDelete() {
+  document.getElementById('delete-modal').classList.remove('show');
+  selectedItemsToDelete = [];
+}
+
+function confirmDelete() {
+  const deletePin = document.getElementById('pin-input').value;
+  if (!deletePin) {
+    alert('请输入删除码');
+    return;
+  }
+
+  document.getElementById('selected-items-input').value = JSON.stringify(selectedItemsToDelete);
+  document.getElementById('delete-pin-input').value = deletePin;
+  document.getElementById('recycle-delete-form').submit();
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  document.querySelectorAll('.asset-checkbox, .accessory-checkbox').forEach(cb => {
+    cb.addEventListener('change', updateDeleteButton);
+  });
+});
+</script>
+</body>
+</html>

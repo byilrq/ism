@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from flask_login import UserMixin
 from app import db, login_manager
 
@@ -30,6 +30,8 @@ class Asset(db.Model):
     status = db.Column(db.String(50))
     remark = db.Column(db.Text)
     image_path = db.Column(db.String(500))
+    deleted_at = db.Column(db.DateTime, nullable=True, index=True)
+    previous_status = db.Column(db.String(50), nullable=True)
 
     images = db.relationship(
         "AssetImage",
@@ -55,6 +57,8 @@ class Accessory(db.Model):
     status = db.Column(db.String(50))
     remark = db.Column(db.Text)
     image_path = db.Column(db.String(500))
+    deleted_at = db.Column(db.DateTime, nullable=True, index=True)
+    previous_status = db.Column(db.String(50), nullable=True)
 
     images = db.relationship(
         "AccessoryImage",

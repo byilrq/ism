@@ -239,9 +239,9 @@ def trim_asset_location_images(location):
 def delete_accessory_with_files(accessory):
     if not accessory:
         return
-    for img in AccessoryImage.query.filter_by(accessory_id=accessory.id).all():
-        delete_image_file(img.image_path)
-    db.session.delete(accessory)
+    accessory.previous_status = accessory.status
+    accessory.status = "已删除"
+    accessory.deleted_at = datetime.now()
 
 
 def delete_asset_with_files(asset, get_asset_related_accessories=None):
@@ -250,9 +250,43 @@ def delete_asset_with_files(asset, get_asset_related_accessories=None):
     if get_asset_related_accessories:
         for accessory in get_asset_related_accessories(asset):
             delete_accessory_with_files(accessory)
+    asset.previous_status = asset.status
+    asset.status = "已删除"
+    asset.deleted_at = datetime.now()
+
+
+def restore_asset(asset):
+    if not asset or not asset.deleted_at:
+        return False
+    asset.status = asset.previous_status if asset.previous_status else "正常"
+    asset.deleted_at = None
+    asset.previous_status = None
+    return True
+
+
+def restore_accessory(accessory):
+    if not accessory or not accessory.deleted_at:
+        return False
+    accessory.status = accessory.previous_status if accessory.previous_status else "正常"
+    accessory.deleted_at = None
+    accessory.previous_status = None
+    return True
+
+
+def permanent_delete_asset(asset):
+    if not asset:
+        return
     for img in AssetImage.query.filter_by(asset_id=asset.id).all():
         delete_image_file(img.image_path)
     db.session.delete(asset)
+
+
+def permanent_delete_accessory(accessory):
+    if not accessory:
+        return
+    for img in AccessoryImage.query.filter_by(accessory_id=accessory.id).all():
+        delete_image_file(img.image_path)
+    db.session.delete(accessory)
 
 
 # ---------------------------------------------------------------------------
