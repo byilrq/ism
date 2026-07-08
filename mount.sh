@@ -869,10 +869,46 @@ mount_rclone() {
         echo "配置名称: $config_name"
         echo "挂载路径: $mount_path"
         df -h "$mount_path"
+
+        write_rclone_mount_service "$config_name" "$mount_path"
+        systemctl daemon-reload
+        systemctl enable "rclone-mount-${config_name}.service"
+        ok "已启用开机自动挂载"
     else
         err "Rclone 挂载失败"
         return 1
     fi
+}
+
+write_rclone_mount_service() {
+    local config_name="$1"
+    local mount_path="$2"
+    local service_file="/etc/systemd/system/rclone-mount-${config_name}.service"
+
+    cat > "$service_file" <<EOF_SYSTEMD
+[Unit]
+Description=Rclone Mount ${config_name}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStartPre=/bin/mkdir -p ${mount_path}
+ExecStart=/usr/bin/rclone mount ${config_name}: ${mount_path} \\
+  --allow-other \\
+  --vfs-cache-mode=full \\
+  --vfs-cache-max-age=24h \\
+  --log-level INFO
+ExecStop=/bin/fusermount -u ${mount_path}
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF_SYSTEMD
+
+    chmod 644 "$service_file"
+    ok "已创建 systemd 服务: $service_file"
 }
 
 unmount_rclone() {
