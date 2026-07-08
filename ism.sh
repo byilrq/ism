@@ -6,7 +6,7 @@ APP_DIR="${APP_ROOT}/app"
 VENV_DIR="${APP_ROOT}/venv"
 BACKUP_DIR="${APP_ROOT}/backups"
 BACKUP_FILE="${BACKUP_DIR}/ism_latest.sql"
-BACKUP_SCRIPT="${APP_ROOT}/ism_backup.sh"
+BACKUP_SCRIPT="${APP_ROOT}/ism_backup.py"
 CRON_BACKUP_FILE="/etc/cron.d/ism_backup"
 BACKUP_LOG_FILE="/var/log/ism_backup.log"
 
@@ -369,7 +369,6 @@ download_files() {
     cp -f "${EXTRACTED_DIR}config.yaml" "$TMP_DIR/config.yaml"
     cp -f "${EXTRACTED_DIR}run.py" "$TMP_DIR/run.py"
     cp -f "${EXTRACTED_DIR}requirements.txt" "$TMP_DIR/requirements.txt"
-    cp -f "${EXTRACTED_DIR}ism_backup.sh" "$TMP_DIR/ism_backup.sh"
 
     ok "项目文件下载完成（直接从 GitHub 仓库同步）"
 }
@@ -389,8 +388,6 @@ deploy_files() {
     cp -f "$TMP_DIR/config.yaml" "$APP_ROOT/config.yaml"
     cp -f "$TMP_DIR/run.py" "$APP_ROOT/run.py"
     cp -f "$TMP_DIR/requirements.txt" "$APP_ROOT/requirements.txt"
-    cp -f "$TMP_DIR/ism_backup.sh" "$APP_ROOT/ism_backup.sh"
-    chmod +x "$APP_ROOT/ism_backup.sh"
 
     mkdir -p "$ASSET_IMG_DIR" "$ACCESSORY_IMG_DIR"
     ok "应用文件已部署"
@@ -1552,7 +1549,7 @@ install_backup_cron() {
     if [ ! -f "$BACKUP_SCRIPT" ]; then
         info "备份脚本不存在，正在从 GitHub 下载..."
 
-        local backup_script_url="https://raw.githubusercontent.com/byilrq/ism/main/ism_backup.sh"
+        local backup_script_url="https://raw.githubusercontent.com/byilrq/ism/main/ism_backup.py"
         if curl -fsSL --retry 3 "$backup_script_url" -o "$BACKUP_SCRIPT" 2>/dev/null; then
             chmod +x "$BACKUP_SCRIPT"
             ok "备份脚本已下载：$BACKUP_SCRIPT"
@@ -1567,7 +1564,7 @@ install_backup_cron() {
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 MAILTO=""
-0 20 * * * root flock -n /var/run/ism_backup.lock ${BACKUP_SCRIPT}
+0 20 * * * root flock -n /var/run/ism_backup.lock python3 ${BACKUP_SCRIPT}
 EOF_CRON
     chmod 644 "$CRON_BACKUP_FILE"
     systemctl restart cron
@@ -1621,17 +1618,36 @@ delete_backup_cron() {
     fi
 }
 
+manual_backup_database() {
+    info "执行手动数据库备份"
+    if [ ! -f "$BACKUP_SCRIPT" ]; then
+        err "备份脚本不存在：$BACKUP_SCRIPT"
+        return 1
+    fi
+
+    python3 "$BACKUP_SCRIPT"
+
+    if [ -f "$BACKUP_FILE" ]; then
+        ok "备份完成：$BACKUP_FILE"
+        ls -lh "$BACKUP_FILE"
+    else
+        err "备份失败"
+        return 1
+    fi
+}
+
 setup_backup() {
     load_state
     ensure_state_defaults
 
     while true; do
-        echo "菜单 8：管理 cron 数据库备份任务"
+        echo "菜单 5 - 数据库备份：管理 cron 备份任务"
         echo "  1 = 生成/重置 cron 备份任务"
         echo "  2 = 查看 cron 任务和运行情况"
         echo "  3 = 删除 cron 备份任务"
+        echo "  4 = 手动备份数据库"
         echo "  0 = 返回主菜单"
-        read -r -p "请选择 [1/2/3/0]: " backup_choice
+        read -r -p "请选择 [1/2/3/4/0]: " backup_choice
 
         case "${backup_choice:-0}" in
             1)
@@ -1644,6 +1660,10 @@ setup_backup() {
                 ;;
             3)
                 delete_backup_cron
+                submenu_pause
+                ;;
+            4)
+                manual_backup_database
                 submenu_pause
                 ;;
             0|"")
