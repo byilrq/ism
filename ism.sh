@@ -365,10 +365,12 @@ download_files() {
     done
 
     mkdir -p "$TMP_DIR/app_extract"
-    cp -a "${EXTRACTED_DIR}app/." "$TMP_DIR/app_extract/"
-    cp -f "${EXTRACTED_DIR}config.yaml" "$TMP_DIR/config.yaml"
-    cp -f "${EXTRACTED_DIR}run.py" "$TMP_DIR/run.py"
-    cp -f "${EXTRACTED_DIR}requirements.txt" "$TMP_DIR/requirements.txt"
+    cp -a "${EXTRACTED_DIR}app/." "$TMP_DIR/app_extract/" 2>/dev/null || true
+    cp -f "${EXTRACTED_DIR}config.yaml" "$TMP_DIR/config.yaml" 2>/dev/null || true
+    cp -f "${EXTRACTED_DIR}run.py" "$TMP_DIR/run.py" 2>/dev/null || true
+    cp -f "${EXTRACTED_DIR}requirements.txt" "$TMP_DIR/requirements.txt" 2>/dev/null || true
+    cp -f "${EXTRACTED_DIR}ism_backup.py" "$TMP_DIR/ism_backup.py" 2>/dev/null || true
+    cp -f "${EXTRACTED_DIR}ism_latest.sql" "$TMP_DIR/ism_latest.sql" 2>/dev/null || true
 
     ok "项目文件下载完成（直接从 GitHub 仓库同步）"
 }
@@ -388,6 +390,7 @@ deploy_files() {
     cp -f "$TMP_DIR/config.yaml" "$APP_ROOT/config.yaml"
     cp -f "$TMP_DIR/run.py" "$APP_ROOT/run.py"
     cp -f "$TMP_DIR/requirements.txt" "$APP_ROOT/requirements.txt"
+    cp -f "$TMP_DIR/ism_latest.sql" "$BACKUP_FILE"
 
     mkdir -p "$ASSET_IMG_DIR" "$ACCESSORY_IMG_DIR"
     ok "应用文件已部署"
