@@ -369,7 +369,6 @@ download_files() {
     cp -f "${EXTRACTED_DIR}config.yaml" "$TMP_DIR/config.yaml"
     cp -f "${EXTRACTED_DIR}run.py" "$TMP_DIR/run.py"
     cp -f "${EXTRACTED_DIR}requirements.txt" "$TMP_DIR/requirements.txt"
-    cp -f "${EXTRACTED_DIR}ism.sql" "$TMP_DIR/ism.sql"
     cp -f "${EXTRACTED_DIR}ism_backup.sh" "$TMP_DIR/ism_backup.sh"
 
     ok "项目文件下载完成（直接从 GitHub 仓库同步）"
@@ -390,7 +389,6 @@ deploy_files() {
     cp -f "$TMP_DIR/config.yaml" "$APP_ROOT/config.yaml"
     cp -f "$TMP_DIR/run.py" "$APP_ROOT/run.py"
     cp -f "$TMP_DIR/requirements.txt" "$APP_ROOT/requirements.txt"
-    cp -f "$TMP_DIR/ism.sql" "$APP_ROOT/ism.sql"
     cp -f "$TMP_DIR/ism_backup.sh" "$APP_ROOT/ism_backup.sh"
     chmod +x "$APP_ROOT/ism_backup.sh"
 
@@ -425,8 +423,13 @@ FLUSH PRIVILEGES;
 EOF_DB
 
     info "导入数据库备份"
-    mysql "$DB_NAME" < "$APP_ROOT/ism.sql"
-    ok "数据库已导入"
+    if [ -f "$BACKUP_FILE" ]; then
+        mysql "$DB_NAME" < "$BACKUP_FILE"
+        ok "数据库已导入"
+    else
+        err "未找到备份文件：$BACKUP_FILE"
+        return 1
+    fi
 }
 
 setup_admin_user() {
