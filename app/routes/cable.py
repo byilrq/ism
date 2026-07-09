@@ -545,7 +545,7 @@ CABLE_SEARCH_HTML = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>电缆查询</title>
+<title>电缆</title>
 <style>
 :root{--bg:#edf1f5;--card:#ffffff;--line:#d9e1ea;--text:#233243;--muted:#677383;--primary:#5f6f82;--primary-soft:#eef2f6;--cyan:#5e8e9f;--cyan-soft:#eef6f8;--orange:#b88347;--orange-soft:#faf2e8;}
 *{box-sizing:border-box;}
@@ -702,12 +702,15 @@ function confirmDeleteSelected(){
 <div class="wrap">
     <div class="card"><div class="topbar"><div><strong>当前用户：</strong>{{ user_display }}</div><div>{% if current_user.is_authenticated %}<a class="power-link" href="/logout" title="退出登录"><button type="button" class="btn-power" aria-label="退出登录"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8"></path><path d="M7.05 5.05a9 9 0 1 0 9.9 0"></path></svg></button></a>{% endif %}</div></div></div>
     <div class="card">
-        <div class="switch-row"><a href="/"><button type="button" class="tab-btn">资产查询</button></a><a href="/cable"><button type="button" class="tab-btn tab-active-cable">电缆查询</button></a></div>
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
-            <h2 style="margin:0;">电缆查询</h2>
-            <a href="/scan_label?auto=1" title="条形码扫描"><button type="button" class="btn-gray icon-only-btn" aria-label="条形码扫描">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H6a2 2 0 0 0-2 2v2"></path><path d="M16 4h2a2 2 0 0 1 2 2v2"></path><path d="M8 20H6a2 2 0 0 1-2-2v-2"></path><path d="M16 20h2a2 2 0 0 0 2-2v-2"></path><path d="M5 12h14"></path></svg>
-            </button></a>
+        <div class="switch-row"><a href="/"><button type="button" class="tab-btn">仪器</button></a><a href="/cable"><button type="button" class="tab-btn tab-active-cable">电缆</button></a></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+            <h2 style="margin:0;">电缆</h2>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                {% if can_manage %}<a href="/cable/new{% if prefill_cable_no %}?cable_no={{ prefill_cable_no|urlencode }}{% endif %}"><button type="button" class="btn-green icon-only-btn" aria-label="新增电缆" style="border-radius:12px;font-size:24px;font-weight:700;">+</button></a>{% else %}<button type="button" class="btn-disabled icon-only-btn" disabled style="border-radius:12px;font-size:24px;font-weight:700;">+</button>{% endif %}
+                <a href="/scan_label?auto=1" title="条形码扫描"><button type="button" class="btn-gray icon-only-btn" aria-label="条形码扫描">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H6a2 2 0 0 0-2 2v2"></path><path d="M16 4h2a2 2 0 0 1 2 2v2"></path><path d="M8 20H6a2 2 0 0 1-2-2v-2"></path><path d="M16 20h2a2 2 0 0 0 2-2v-2"></path><path d="M5 12h14"></path></svg>
+                </button></a>
+            </div>
         </div>
         {% if scan_code %}<div style="color:#666;margin-bottom:10px;word-break:break-all;">当前来自扫码访问，已自动带入电缆编号：<strong>{{ scan_code }}</strong></div>{% endif %}
         <form method="get" action="/cable">
@@ -716,9 +719,10 @@ function confirmDeleteSelected(){
                 <input type="text" name="keyword" value="{{ keyword }}" placeholder="编号、责任人、位置、备注">
                 <select name="spec_filter"><option value="">规格</option>{% for s in specs %}<option value="{{ s }}" {% if spec_filter == s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
                 <select name="status_filter"><option value="">状态</option>{% for s in statuses %}<option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
-                <button type="submit" class="btn-search-home">搜索</button>
-                <a href="/cable"><button type="button" class="btn-reset-home">重置</button></a>
-                {% if can_manage %}<a href="/cable/new{% if prefill_cable_no %}?cable_no={{ prefill_cable_no|urlencode }}{% endif %}"><button type="button" class="btn-add-home">+</button></a>{% else %}<button type="button" class="btn-disabled" disabled>+</button>{% endif %}
+                <div style="display:flex;align-items:center;gap:8px;margin-left:auto;">
+                    <button type="submit" class="btn-search icon-only-btn" title="搜索"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg></button>
+                    <a href="/cable"><button type="button" class="btn-reset icon-only-btn" title="重置"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M1 4v6h6"></path><path d="M23 20v-6h-6"></path><path d="M20.49 9A9 9 0 0 0 5.64 5.64"></path><path d="M3.51 15A9 9 0 0 0 18.36 18.36"></path></svg></button></a>
+                </div>
             </div>
         </form>
         <form method="post" action="/cable/import" enctype="multipart/form-data" style="margin-top:12px;"><div class="action-bar"><input type="file" name="excel_file" accept=".xlsx,.xlsm,.xltx,.xltm" {% if not can_manage %}disabled{% endif %}><button type="submit" class="btn-orange {% if not can_manage %}btn-disabled{% endif %}" {% if not can_manage %}disabled{% endif %}>批量上传电缆</button></div><div class="muted" style="margin-top:8px;">Excel导入、导出格式一致，导入操作只更新，不会空白填充。</div></form>

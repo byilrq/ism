@@ -1700,13 +1700,7 @@ def register_routes(app):
 
             for accessory_id in accessory_ids:
                 accessory = Accessory.query.get(accessory_id)
-                resolved_parent_id = None
                 if accessory:
-                    resolved_parent_id = accessory.parent_asset_id or resolve_parent_asset_id(
-                        internal_no=accessory.sub_internal_no,
-                        group_no=accessory.sub_group_no
-                    )
-                if accessory and resolved_parent_id not in asset_ids:
                     delete_accessory_with_files(accessory)
 
             db.session.commit()
