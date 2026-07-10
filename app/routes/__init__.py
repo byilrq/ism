@@ -512,7 +512,8 @@ def build_search_rows(keyword="", searched=False):
         owner_asset_conditions.extend([
             Asset.owner.like(f"%{keyword}%"),
             location_like(Asset.location, keyword),
-            Asset.name.like(f"%{keyword}%")
+            Asset.name.like(f"%{keyword}%"),
+            Asset.model.like(f"%{keyword}%")
         ])
     if remark_search_enabled:
         owner_asset_conditions.append(Asset.remark.like(f"%{keyword}%"))
@@ -552,7 +553,8 @@ def build_search_rows(keyword="", searched=False):
         owner_accessory_conditions.extend([
             Accessory.owner.like(f"%{keyword}%"),
             location_like(Accessory.location, keyword),
-            Accessory.name.like(f"%{keyword}%")
+            Accessory.name.like(f"%{keyword}%"),
+            Accessory.model.like(f"%{keyword}%")
         ])
     if remark_search_enabled:
         owner_accessory_conditions.append(Accessory.remark.like(f"%{keyword}%"))

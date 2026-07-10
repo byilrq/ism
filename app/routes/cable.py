@@ -725,7 +725,19 @@ function confirmDeleteSelected(){
                 </div>
             </div>
         </form>
-        <form method="post" action="/cable/import" enctype="multipart/form-data" style="margin-top:12px;"><div class="action-bar"><input type="file" name="excel_file" accept=".xlsx,.xlsm,.xltx,.xltm" {% if not can_manage %}disabled{% endif %}><button type="submit" class="btn-orange {% if not can_manage %}btn-disabled{% endif %}" {% if not can_manage %}disabled{% endif %}>批量上传电缆</button></div><div class="muted" style="margin-top:8px;">Excel导入、导出格式一致，导入操作只更新，不会空白填充。</div></form>
+        <form id="cable-upload-form" method="post" action="/cable/import" enctype="multipart/form-data" style="margin-top:12px;"><div class="action-bar"><input type="file" name="excel_file" id="cable-upload-file-input" accept=".xlsx,.xlsm,.xltx,.xltm" style="display:none;" {% if not can_manage %}disabled{% endif %}><button type="button" id="cable-upload-select-btn" class="btn-gray" onclick="document.getElementById('cable-upload-file-input').click();" style="width:auto;min-width:120px;" {% if not can_manage %}disabled{% endif %}>选择文件</button><button type="submit" class="btn-orange {% if not can_manage %}btn-disabled{% endif %}" {% if not can_manage %}disabled{% endif %}>批量上传电缆</button></div><div class="muted" style="margin-top:8px;">Excel导入、导出格式一致，导入操作只更新，不会空白填充。</div></form>
+<script>
+document.getElementById('cable-upload-file-input').addEventListener('change', function(){
+    const btn = document.getElementById('cable-upload-select-btn');
+    if(this.files && this.files.length > 0){
+        btn.textContent = this.files[0].name;
+        btn.className = 'btn-green';
+    }else{
+        btn.textContent = '选择文件';
+        btn.className = 'btn-gray';
+    }
+});
+</script>
         {% if error %}<div class="err">{{ error }}</div>{% endif %}
     </div>
     {% if searched %}

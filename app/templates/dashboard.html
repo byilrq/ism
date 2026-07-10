@@ -352,7 +352,7 @@ function confirmDeleteSelected(){
             <input type="hidden" name="sort_field" value="{{ sort_field }}">
             <input type="hidden" name="sort_order" value="{{ sort_order }}">
             <div class="action-bar">
-                <input type="text" name="keyword" value="{{ keyword }}" placeholder="编号/后6位、责任人、位置、备注、名称">
+                <input type="text" name="keyword" value="{{ keyword }}" placeholder="编号/后6位、责任人、位置、备注、名称、型号">
                 <select name="status_filter">
                     <option value="" disabled selected>状态</option>
                     {% for s in statuses %}
@@ -420,7 +420,7 @@ function confirmDeleteSelected(){
                             <th><input type="checkbox" id="select-all-filtered" onclick="syncAllFilteredSelection(this)" title="选中当前筛选结果全部"></th>
                             <th>集团编号</th><th>内部编号</th><th>资产名称</th><th>位置</th><th>状态</th><th>责任人</th>
                             <th>
-                                <a class="sort-link" href="/?searched=1&keyword={{ keyword }}&status_filter={{ status_filter }}&device_type_filter={{ device_type_filter }}&per_page={{ per_page }}&page=1&sort_field=asset_date&sort_order={% if sort_field == 'asset_date' and sort_order == 'desc' %}asc{% else %}desc{% endif %}">
+                                <a class="sort-link" href="/?searched=1&keyword={{ keyword }}&status_filter={{ status_filter }}&device_type_filter={{ device_type_filter }}&model_filter={{ model_filter }}&per_page={{ per_page }}&page=1&sort_field=asset_date&sort_order={% if sort_field == 'asset_date' and sort_order == 'desc' %}asc{% else %}desc{% endif %}">
                                     时间{% if sort_field == 'asset_date' %}{{ ' ↑' if sort_order == 'asc' else ' ↓' }}{% else %} ↕{% endif %}
                                 </a>
                             </th>
@@ -443,9 +443,9 @@ function confirmDeleteSelected(){
             </div>
         </form>
         <div class="pagination">
-            {% if page > 1 %}<a href="/?searched=1&keyword={{ keyword }}&status_filter={{ status_filter }}&device_type_filter={{ device_type_filter }}&per_page={{ per_page }}&page={{ page - 1 }}&sort_field={{ sort_field }}&sort_order={{ sort_order }}">上一页</a>{% endif %}
+            {% if page > 1 %}<a href="/?searched=1&keyword={{ keyword }}&status_filter={{ status_filter }}&device_type_filter={{ device_type_filter }}&model_filter={{ model_filter }}&per_page={{ per_page }}&page={{ page - 1 }}&sort_field={{ sort_field }}&sort_order={{ sort_order }}">上一页</a>{% endif %}
             <span>第 {{ page }} / {{ total_pages }} 页</span>
-            {% if page < total_pages %}<a href="/?searched=1&keyword={{ keyword }}&status_filter={{ status_filter }}&device_type_filter={{ device_type_filter }}&per_page={{ per_page }}&page={{ page + 1 }}&sort_field={{ sort_field }}&sort_order={{ sort_order }}">下一页</a>{% endif %}
+            {% if page < total_pages %}<a href="/?searched=1&keyword={{ keyword }}&status_filter={{ status_filter }}&device_type_filter={{ device_type_filter }}&model_filter={{ model_filter }}&per_page={{ per_page }}&page={{ page + 1 }}&sort_field={{ sort_field }}&sort_order={{ sort_order }}">下一页</a>{% endif %}
         </div>
     </div>
     {% endif %}
