@@ -849,8 +849,11 @@ mount_rclone() {
     fi
 
     if mountpoint -q "$mount_path" 2>/dev/null; then
-        err "$mount_path 已挂载"
-        return 1
+        ok "Rclone 已挂载"
+        echo "配置名称: $config_name"
+        echo "挂载路径: $mount_path"
+        df -h "$mount_path"
+        return 0
     fi
 
     echo "[*] 正在挂载 $config_name 到 $mount_path..."
