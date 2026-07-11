@@ -2252,11 +2252,6 @@ update_domain() {
         new_domain="$(echo "$new_domain" | tr -d '[:space:]')"
     done
 
-    if [ -n "$current_domain" ] && [ "$new_domain" = "$current_domain" ]; then
-        echo "域名相同，无需更新。"
-        return 0
-    fi
-
     # 如果输入了域名，确保证书就绪
     if [ -n "$new_domain" ]; then
         echo "准备 SSL 证书..."
@@ -2266,15 +2261,42 @@ update_domain() {
         fi
     fi
 
-    # 检测端口冲突
-    local use_proxy_mode=0
+    # 自检测端口冲突，选择HTTPS模式
+    local https_mode="0"
     local internal_https_port="2443"
 
     if [ -n "$new_domain" ]; then
-        if grep -r "listen.*443" /etc/nginx/sites-enabled/*.conf 2>/dev/null | grep -q "server_name.*${new_domain}"; then
-            echo -e "${YELLOW}⚠️ 检测到 443 端口已被其他应用占用（server_name: ${new_domain}）${NC}"
-            echo -e "${YELLOW}将自动启用代理模式：ISM 监听内部端口 ${internal_https_port}${NC}"
-            use_proxy_mode=1
+        echo -e "${YELLOW}请选择部署模式：${NC}"
+        echo "1) xray集成     - ISM监听内部 8080，由xray 443分流（当前架构）"
+        echo "2) 标准模式      - ISM 直接监听 443 端口（不使用xray）"
+        echo "3) nginx转发模式 - ISM监听内部端口，nginx 2083 转发"
+        echo ""
+
+        local mode_choice="1"
+        read -e -p "请选择模式 [1-3，默认1]: " mode_choice
+        mode_choice="${mode_choice:-1}"
+
+        case "$mode_choice" in
+            1) https_mode="1" ;;
+            2) https_mode="2" ;;
+            3) https_mode="3" ;;
+            *) https_mode="1" ;;
+        esac
+
+        if [ "$https_mode" = "2" ]; then
+            echo -e "${YELLOW}⚠️ 即将配置标准模式（ISM直接监听443，不使用xray）${NC}"
+            if ss -tlnp 2>/dev/null | grep -q ":443[[:space:]]"; then
+                echo -e "${RED}⚠️ 警告：443 端口已被占用！${NC}"
+                read -e -p "是否继续？(y/n): " confirm
+                if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+                    echo "已取消操作"
+                    return 0
+                fi
+            fi
+        elif [ "$https_mode" = "1" ]; then
+            echo -e "${YELLOW}✓ 已选择xray集成模式（ISM监听 8080，xray处理443）${NC}"
+        else
+            echo -e "${YELLOW}✓ 已选择nginx转发模式（ISM监听内部端口，nginx 2083转发）${NC}"
         fi
     fi
 
@@ -2282,16 +2304,32 @@ update_domain() {
     local bak_suffix=".bak.$(date '+%Y%m%d_%H%M%S')"
     cp -a "$STATE_FILE" "${STATE_FILE}${bak_suffix}" 2>/dev/null || true
 
+    # 备份旧nginx配置
+    [ -f "$NGINX_SITE_FILE" ] && cp -a "$NGINX_SITE_FILE" "${NGINX_SITE_FILE}${bak_suffix}" 2>/dev/null || true
+
+    # 清理符号链接和旧配置，确保重新生成
+    # 只删除ism.conf的符号链接，不删除sites-enabled中的其他文件
+    rm -f "$NGINX_SITE_LINK" 2>/dev/null || true
+
+    # 删除旧域名对应的符号链接（无论域名是否改变，都要清理旧的配置）
+    # 这样确保nginx只加载新的ism.conf，不会有旧配置干扰
+    if [ -n "$current_domain" ]; then
+        rm -f "/etc/nginx/sites-enabled/$current_domain" 2>/dev/null || true
+    fi
+
+    # 完全清空配置文件
+    : > "$NGINX_SITE_FILE"
+
     # 更新 DOMAIN
     DOMAIN="$new_domain"
     save_state
 
     # 重新生成 nginx 配置
-    if [ "$use_proxy_mode" = "1" ]; then
-        # 代理模式：只监听内部端口
+    if [ "$https_mode" = "1" ] && [ -n "$DOMAIN" ] && [ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]; then
+        # 模式1：xray集成，ISM监听127.0.0.1:8080
         cat > "$NGINX_SITE_FILE" <<EOF
 server {
-    listen 127.0.0.1:${internal_https_port} ssl;
+    listen 127.0.0.1:8080 ssl;
     server_name ${DOMAIN};
 
     ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
@@ -2310,19 +2348,14 @@ server {
     }
 }
 EOF
-        echo -e "${GREEN}✅ 代理模式配置已生成${NC}"
-        echo -e "${YELLOW}请在代理工具的 ${new_domain}:443 配置中添加以下转发规则：${NC}"
-        echo ""
-        echo -e "${BOLD}location /ism {${NC}"
-        echo -e "    proxy_pass https://127.0.0.1:${internal_https_port};"
-        echo -e "    proxy_ssl_verify off;"
-        echo -e "}${NC}"
-        echo ""
-    elif [ -n "$DOMAIN" ] && [ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]; then
-        # 标准模式：监听 PUBLIC_PORT（2083）
+        echo -e "${GREEN}✅ 已配置xray集成模式${NC}"
+        echo -e "${GREEN}ISM监听: https://127.0.0.1:8080（xray伪装站）${NC}"
+        echo -e "${YELLOW}用户访问: https://${DOMAIN}:443（由xray分流）${NC}"
+    elif [ "$https_mode" = "2" ] && [ -n "$DOMAIN" ] && [ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]; then
+        # 模式2：标准模式，ISM直接监听443
         cat > "$NGINX_SITE_FILE" <<EOF
 server {
-    listen ${PUBLIC_PORT} ssl;
+    listen 443 ssl;
     server_name ${DOMAIN};
 
     ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
@@ -2341,9 +2374,35 @@ server {
     }
 }
 EOF
-        echo -e "${GREEN}✅ 已配置 HTTPS: https://${DOMAIN}:${PUBLIC_PORT}${NC}"
+        echo -e "${GREEN}✅ 已配置标准模式: https://${DOMAIN}:443${NC}"
+    elif [ "$https_mode" = "3" ] && [ -n "$DOMAIN" ] && [ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]; then
+        # 模式3：nginx转发模式，ISM监听内部端口，nginx监听2083转发（外网可访问）
+        cat > "$NGINX_SITE_FILE" <<EOF
+server {
+    listen 2083 ssl;
+    server_name ${DOMAIN};
+
+    ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+    client_max_body_size 30m;
+
+    location / {
+        proxy_pass http://127.0.0.1:${INTERNAL_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 300;
+    }
+}
+EOF
+        echo -e "${GREEN}✅ 已配置nginx转发模式${NC}"
+        echo -e "${GREEN}ISM监听: http://127.0.0.1:${INTERNAL_PORT}（内部应用）${NC}"
+        echo -e "${YELLOW}nginx转发: https://${DOMAIN}:2083${NC}"
     else
-        # HTTP 模式
+        # HTTP 模式（未配置域名或未找到证书）
         cat > "$NGINX_SITE_FILE" <<EOF
 server {
     listen ${PUBLIC_PORT};
@@ -2392,10 +2451,12 @@ EOF
 
     echo "============================================="
     echo -e "${GREEN}✅ ISM 域名更新完成${NC}"
-    if [ "$use_proxy_mode" = "0" ]; then
-        [ -n "$DOMAIN" ] && echo "ISM 访问地址: https://${DOMAIN}:${PUBLIC_PORT}/"
-    else
-        echo "ISM 已接入代理工具，通过代理工具访问"
+    if [ "$https_mode" = "1" ]; then
+        echo "ISM 模式: xray集成（监听 127.0.0.1:8080）"
+    elif [ "$https_mode" = "2" ]; then
+        echo "ISM 访问地址: https://${DOMAIN}:443/"
+    elif [ "$https_mode" = "3" ]; then
+        echo "ISM 访问地址: https://${DOMAIN}:2083/"
     fi
     echo "旧状态备份: ${STATE_FILE}${bak_suffix}"
     echo "============================================="

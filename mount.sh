@@ -840,8 +840,7 @@ mount_rclone() {
         echo -e "${GREEN}[✓] 使用默认配置: $config_name${NC}"
     fi
 
-    echo -n "请输入挂载路径 (默认: /mnt/rclone): "
-    read -r mount_path
+    read -r -p "请输入挂载路径 (默认: /mnt/rclone): " mount_path
     mount_path=${mount_path:-/mnt/rclone}
 
     if [ ! -d "$mount_path" ]; then
@@ -856,16 +855,24 @@ mount_rclone() {
         return 0
     fi
 
-    echo "[*] 正在挂载 $config_name 到 $mount_path..."
+    echo -e "${BLUE}[*] 正在挂载 $config_name 到 $mount_path...${NC}"
 
     rclone mount "${config_name}:" "$mount_path" \
-        --daemon \
         --allow-other \
+        --allow-non-empty \
         --vfs-cache-mode=full \
         --vfs-cache-max-age=24h \
-        2>/dev/null
+        --log-level INFO \
+        >/var/log/rclone-mount.log 2>&1 &
+    local rclone_pid=$!
 
-    sleep 2
+    sleep 4
+
+    if ! ps -p "$rclone_pid" >/dev/null 2>&1; then
+        err "Rclone 进程启动失败，查看日志："
+        tail -20 /var/log/rclone-mount.log
+        return 1
+    fi
 
     if mountpoint -q "$mount_path" 2>/dev/null; then
         ok "Rclone 挂载成功"
@@ -878,7 +885,9 @@ mount_rclone() {
         systemctl enable "rclone-mount-${config_name}.service"
         ok "已启用开机自动挂载"
     else
-        err "Rclone 挂载失败"
+        err "Rclone 挂载失败（路径未挂载）"
+        echo "进程 PID: $rclone_pid"
+        tail -20 /var/log/rclone-mount.log
         return 1
     fi
 }
@@ -895,10 +904,13 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=notify
+Type=simple
+User=root
+Group=root
 ExecStartPre=/bin/mkdir -p ${mount_path}
 ExecStart=/usr/bin/rclone mount ${config_name}: ${mount_path} \\
   --allow-other \\
+  --allow-non-empty \\
   --vfs-cache-mode=full \\
   --vfs-cache-max-age=24h \\
   --log-level INFO
