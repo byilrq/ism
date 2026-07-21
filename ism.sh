@@ -456,7 +456,7 @@ write_nginx_http() {
     cat > "$NGINX_SITE_FILE" <<EOF_NGINX_HTTP
 server {
     listen ${listen_addr}:${PUBLIC_PORT};
-    server_name ${DOMAIN:-_};
+    server_name ${DOMAIN} localhost 127.0.0.1 _;
 
     client_max_body_size 30m;
 
@@ -488,7 +488,7 @@ write_nginx_https() {
     cat > "$NGINX_SITE_FILE" <<EOF_NGINX_HTTPS
 server {
     listen ${listen_addr}:${PUBLIC_PORT} ssl;
-    server_name ${DOMAIN};
+    server_name ${DOMAIN} localhost 127.0.0.1 _;
 
     ssl_certificate ${cert_dir}/fullchain.pem;
     ssl_certificate_key ${cert_dir}/privkey.pem;
