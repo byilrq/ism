@@ -391,6 +391,8 @@ deploy_files() {
     cp -f "$TMP_DIR/run.py" "$APP_ROOT/run.py"
     cp -f "$TMP_DIR/requirements.txt" "$APP_ROOT/requirements.txt"
     cp -f "$TMP_DIR/ism_latest.sql" "$BACKUP_FILE"
+    cp -f "$TMP_DIR/ism_backup.py" "$BACKUP_SCRIPT"
+    chmod +x "$BACKUP_SCRIPT"
 
     mkdir -p "$ASSET_IMG_DIR" "$ACCESSORY_IMG_DIR"
     ok "应用文件已部署"

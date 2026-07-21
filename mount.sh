@@ -753,19 +753,23 @@ EOF
     echo -e "${BLUE}[*] 验证配置中...${NC}"
     sleep 2
 
-    if rclone lsd "${config_name}:" --max-depth 0 &>/dev/null; then
+    if timeout 15 rclone lsd "${config_name}:" --max-depth 0 &>/dev/null; then
         echo -e "${GREEN}[✓] Pcloud 授权成功 ✓${NC}"
         echo ""
         echo -e "${CYAN}[配置信息]${NC}"
-        rclone about "${config_name}:" 2>/dev/null | head -5
+        timeout 15 rclone about "${config_name}:" 2>/dev/null | head -5 || echo "  (获取配置信息超时)"
         return 0
     else
-        echo -e "${RED}[!] 配置验证失败${NC}"
+        echo -e "${YELLOW}[!] 配置验证失败或超时${NC}"
         echo ""
         echo -e "${YELLOW}[可能原因]${NC}"
         echo "  1. token 已过期或无效"
-        echo "  2. 网络连接失败"
+        echo "  2. 网络连接慢或超时"
         echo "  3. 粘贴时多复制了空格"
+        echo ""
+        echo -e "${CYAN}[可选操作]${NC}"
+        echo "  手动验证 token："
+        echo "  curl -s -H 'Authorization: Bearer YOUR_TOKEN' https://api.pcloud.com/userinfo"
         echo ""
         return 1
     fi
