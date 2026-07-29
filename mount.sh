@@ -211,26 +211,6 @@ prompt_webdav_install() {
     fi
 
     echo "WebDAV 安装说明："
-    echo "1) 这里是直连网盘或存储提供的 WebDAV。"
-    echo "2) 请填写 WebDAV Connection URL、Connection ID（或用户名）、Password。"
-    echo "3) 程序远端默认目录固定为：/ism_images/assets 和 /ism_images/accessories。"
-    echo "4) 数据库备份会同步到：/ism_images/sql_backups/。"
-    echo
-
-    read -r -p "请输入 WebDAV Connection URL: " DAV_URL
-    read -r -p "请输入 Connection ID / 用户名: " DAV_USER
-    read -r -p "请输入 Password: " DAV_PASS
-    read -r -p "请输入本机挂载目录 [${DAV_MOUNT}]: " input_mount
-
-    if [ -n "${input_mount:-}" ]; then DAV_MOUNT="$input_mount"; fi
-
-    if [ -z "$DAV_URL" ] || [ -z "$DAV_USER" ] || [ -z "$DAV_PASS" ]; then
-        err "WebDAV 参数不能为空"
-        return 1
-    fi
-
-    stop_webdav_mount_service
-    mkdir -p "$DAV_MOUNT"
     write_davfs_mount_config
     write_davfs_secrets_entry
     write_webdav_mount_service
@@ -445,8 +425,6 @@ EOF_GUARD
 }
 
 prepare_cd_mount_dir() {
-    mkdir -p "$CD_MOUNT_DIR" "$CD_MOUNT_RECOVERY_DIR"
-
     if cd_mount_is_active; then
         return 0
     fi
@@ -847,10 +825,6 @@ mount_rclone() {
     read -r -p "请输入挂载路径 (默认: /mnt/rclone): " mount_path
     mount_path=${mount_path:-/mnt/rclone}
 
-    if [ ! -d "$mount_path" ]; then
-        mkdir -p "$mount_path"
-    fi
-
     if mountpoint -q "$mount_path" 2>/dev/null; then
         ok "Rclone 已挂载"
         echo "配置名称: $config_name"
@@ -860,6 +834,8 @@ mount_rclone() {
     fi
 
     echo -e "${BLUE}[*] 正在挂载 $config_name 到 $mount_path...${NC}"
+
+    mkdir -p "$mount_path"
 
     rclone mount "${config_name}:" "$mount_path" \
         --allow-other \
@@ -1115,10 +1091,6 @@ main() {
                             ;;
                     esac
                 done
-                ;;
-            4)
-                uninstall_webdav
-                submenu_pause
                 ;;
             5)
                 uninstall_clouddrive_app
