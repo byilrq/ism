@@ -477,6 +477,7 @@ def build_search_rows(keyword="", searched=False):
     # 普通关键词仍保留原来的后 6 位编号检索。
     suffix_keyword = "" if is_precise_group_keyword else (keyword[-6:] if len(keyword) >= 6 else "")
 
+    # ---- 编号检索：内部编号 / 集团编号 精确 + 后缀 ----
     exact_assets = Asset.query.filter(
         and_(
             or_(
@@ -499,33 +500,32 @@ def build_search_rows(keyword="", searched=False):
             )
         ).order_by(Asset.internal_no.asc()).all()
 
-    asset_ids = []
+    number_asset_ids = []
     for a in exact_assets + suffix_assets:
-        if a.id not in asset_ids:
-            asset_ids.append(a.id)
+        if a.id not in number_asset_ids:
+            number_asset_ids.append(a.id)
 
     # 备注支持关键词模糊搜索；为避免短关键词误伤，至少连续 2 个字符才启用备注匹配。
     # 完整集团编号搜索时，只保留备注模糊匹配，不再按责任人/位置模糊匹配。
     remark_search_enabled = len(keyword) >= 2
-    owner_asset_conditions = []
+
+    # ---- 文本检索：名称 / 型号 / 责任人 / 位置 / 备注，只展示命中项本身，不展开 ----
+    text_asset_conditions = []
     if not is_precise_group_keyword:
-        owner_asset_conditions.extend([
+        text_asset_conditions.extend([
             Asset.owner.like(f"%{keyword}%"),
             location_like(Asset.location, keyword),
             Asset.name.like(f"%{keyword}%"),
             Asset.model.like(f"%{keyword}%")
         ])
     if remark_search_enabled:
-        owner_asset_conditions.append(Asset.remark.like(f"%{keyword}%"))
+        text_asset_conditions.append(Asset.remark.like(f"%{keyword}%"))
 
-    owner_assets = []
-    if owner_asset_conditions:
-        owner_assets = Asset.query.filter(and_(or_(*owner_asset_conditions), Asset.deleted_at.is_(None))).order_by(Asset.internal_no.asc()).all()
+    text_assets = []
+    if text_asset_conditions:
+        text_assets = Asset.query.filter(and_(or_(*text_asset_conditions), Asset.deleted_at.is_(None))).order_by(Asset.internal_no.asc()).all()
 
-    for a in owner_assets:
-        if a.id not in asset_ids:
-            asset_ids.append(a.id)
-
+    # ---- 配件编号检索：内部编号 / 集团编号 精确 + 后缀 + 前缀 ----
     exact_accessories = Accessory.query.filter(
         and_(
             or_(
@@ -548,25 +548,6 @@ def build_search_rows(keyword="", searched=False):
             )
         ).all()
 
-    owner_accessory_conditions = []
-    if not is_precise_group_keyword:
-        owner_accessory_conditions.extend([
-            Accessory.owner.like(f"%{keyword}%"),
-            location_like(Accessory.location, keyword),
-            Accessory.name.like(f"%{keyword}%"),
-            Accessory.model.like(f"%{keyword}%")
-        ])
-    if remark_search_enabled:
-        owner_accessory_conditions.append(Accessory.remark.like(f"%{keyword}%"))
-
-    owner_accessories = []
-    if owner_accessory_conditions:
-        owner_accessories = Accessory.query.filter(and_(or_(*owner_accessory_conditions), Accessory.deleted_at.is_(None))).all()
-
-    for acc in exact_accessories + suffix_accessories + owner_accessories:
-        if acc.parent_asset_id and acc.parent_asset_id not in asset_ids:
-            asset_ids.append(acc.parent_asset_id)
-
     fuzzy_accessories = Accessory.query.filter(
         and_(
             or_(
@@ -577,25 +558,51 @@ def build_search_rows(keyword="", searched=False):
         )
     ).all()
 
-    standalone_accessories = []
-    standalone_accessory_ids = set()
-    for acc in fuzzy_accessories + exact_accessories + suffix_accessories + owner_accessories:
+    # ---- 配件文本检索：名称 / 型号 / 责任人 / 位置 / 备注，只展示命中项本身 ----
+    text_accessory_conditions = []
+    if not is_precise_group_keyword:
+        text_accessory_conditions.extend([
+            Accessory.owner.like(f"%{keyword}%"),
+            location_like(Accessory.location, keyword),
+            Accessory.name.like(f"%{keyword}%"),
+            Accessory.model.like(f"%{keyword}%")
+        ])
+    if remark_search_enabled:
+        text_accessory_conditions.append(Accessory.remark.like(f"%{keyword}%"))
+
+    text_accessories = []
+    if text_accessory_conditions:
+        text_accessories = Accessory.query.filter(and_(or_(*text_accessory_conditions), Accessory.deleted_at.is_(None))).all()
+
+    # 编号命中的配件：解析父设备，按“主设备 + 全部配件”展开（保留扫描编号的原有行为）。
+    number_accessories = exact_accessories + suffix_accessories + fuzzy_accessories
+    for acc in number_accessories:
+        if acc.parent_asset_id and acc.parent_asset_id not in number_asset_ids:
+            number_asset_ids.append(acc.parent_asset_id)
+
+    number_standalone_accessories = []
+    number_standalone_ids = set()
+    for acc in number_accessories:
         resolved_parent_id = acc.parent_asset_id or resolve_parent_asset_id(
             internal_no=acc.sub_internal_no,
             group_no=acc.sub_group_no
         )
         if resolved_parent_id:
-            if resolved_parent_id not in asset_ids:
-                asset_ids.append(resolved_parent_id)
+            if resolved_parent_id not in number_asset_ids:
+                number_asset_ids.append(resolved_parent_id)
         else:
-            if acc.id not in standalone_accessory_ids:
-                standalone_accessories.append(acc)
-                standalone_accessory_ids.add(acc.id)
+            if acc.id not in number_standalone_ids:
+                number_standalone_accessories.append(acc)
+                number_standalone_ids.add(acc.id)
 
-    if asset_ids:
-        matched_assets = sorted(Asset.query.filter(Asset.id.in_(asset_ids)).all(), key=get_asset_sort_key)
+    shown_asset_ids = set()
+    shown_accessory_ids = set()
+
+    if number_asset_ids:
+        matched_assets = sorted(Asset.query.filter(Asset.id.in_(number_asset_ids)).all(), key=get_asset_sort_key)
 
         for asset in matched_assets:
+            shown_asset_ids.add(asset.id)
             accessories = get_asset_related_accessories(asset)
 
             rows.append({
@@ -617,6 +624,7 @@ def build_search_rows(keyword="", searched=False):
             })
 
             for item in accessories:
+                shown_accessory_ids.add(item.id)
                 rows.append({
                     "row_type": "accessory",
                     "id": item.id,
@@ -635,26 +643,73 @@ def build_search_rows(keyword="", searched=False):
                     "asset_date_text": item.asset_date.isoformat() if item.asset_date else ""
                 })
 
-    existing_row_keys = {(row["row_type"], row["id"]) for row in rows}
-    for item in sorted(standalone_accessories, key=get_accessory_suffix_sort_key):
-        if ("accessory", item.id) not in existing_row_keys:
-            rows.append({
-                "row_type": "accessory",
-                "id": item.id,
-                "type_text": "配件",
-                "internal_no": item.sub_internal_no or "",
-                "group_no": item.sub_group_no or "",
-                "name": item.name,
-                "model": item.model or "",
-                "status": normalize_status_value(item.status),
-                "owner": item.owner or "",
-                "location": item.location or "",
-                "location_detail_url": url_for("asset_location_detail", location=item.location) if item.location else "",
-                "parent_asset_id": item.parent_asset_id or "",
-                "accessory_count": 0,
-                "detail_url": url_for("accessory_detail", accessory_id=item.id),
-                "asset_date_text": item.asset_date.isoformat() if item.asset_date else ""
-            })
+    for item in sorted(number_standalone_accessories, key=get_accessory_suffix_sort_key):
+        if item.id in shown_accessory_ids:
+            continue
+        shown_accessory_ids.add(item.id)
+        rows.append({
+            "row_type": "accessory",
+            "id": item.id,
+            "type_text": "配件",
+            "internal_no": item.sub_internal_no or "",
+            "group_no": item.sub_group_no or "",
+            "name": item.name,
+            "model": item.model or "",
+            "status": normalize_status_value(item.status),
+            "owner": item.owner or "",
+            "location": item.location or "",
+            "location_detail_url": url_for("asset_location_detail", location=item.location) if item.location else "",
+            "parent_asset_id": item.parent_asset_id or "",
+            "accessory_count": 0,
+            "detail_url": url_for("accessory_detail", accessory_id=item.id),
+            "asset_date_text": item.asset_date.isoformat() if item.asset_date else ""
+        })
+
+    # 文本命中的主设备：只展示主设备本身，不展开其配件。
+    for asset in sorted(text_assets, key=get_asset_sort_key):
+        if asset.id in shown_asset_ids:
+            continue
+        shown_asset_ids.add(asset.id)
+        rows.append({
+            "row_type": "asset",
+            "id": asset.id,
+            "type_text": "主设备",
+            "internal_no": asset.internal_no or "",
+            "group_no": asset.group_no or "",
+            "name": asset.name,
+            "model": asset.model or "",
+            "status": normalize_status_value(asset.status),
+            "owner": asset.owner or "",
+            "location": asset.location or "",
+            "location_detail_url": url_for("asset_location_detail", location=asset.location) if asset.location else "",
+            "parent_asset_id": "",
+            "accessory_count": 0,
+            "detail_url": url_for("asset_detail", asset_id=asset.id),
+            "asset_date_text": asset.asset_date.isoformat() if asset.asset_date else ""
+        })
+
+    # 文本命中的配件：只展示配件本身，不拉入父设备和兄弟配件。
+    for item in sorted(text_accessories, key=get_accessory_suffix_sort_key):
+        if item.id in shown_accessory_ids:
+            continue
+        shown_accessory_ids.add(item.id)
+        rows.append({
+            "row_type": "accessory",
+            "id": item.id,
+            "type_text": "配件",
+            "internal_no": item.sub_internal_no or "",
+            "group_no": item.sub_group_no or "",
+            "name": item.name,
+            "model": item.model or "",
+            "status": normalize_status_value(item.status),
+            "owner": item.owner or "",
+            "location": item.location or "",
+            "location_detail_url": url_for("asset_location_detail", location=item.location) if item.location else "",
+            "parent_asset_id": item.parent_asset_id or "",
+            "accessory_count": 0,
+            "detail_url": url_for("accessory_detail", accessory_id=item.id),
+            "asset_date_text": item.asset_date.isoformat() if item.asset_date else ""
+        })
 
     if not rows:
         standalone_conditions = [
