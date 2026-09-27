@@ -727,17 +727,12 @@ def import_accessories_from_excel(file_storage):
 # ---------------------------------------------------------------------------
 
 def register_upload_routes(app):
-    with app.app_context():
-        AssetLocationImage.__table__.create(bind=db.engine, checkfirst=True)
-
     from app.routes import ensure_read_access, ensure_manage_access
 
     @app.route("/uploads/<path:filename>")
     def uploaded_file(filename):
-        safe_path = os.path.normpath(filename)
-        if safe_path.startswith(".."):
-            abort(404)
-        return send_from_directory(Config.UPLOAD_FOLDER, safe_path)
+        from app.image_uploads import serve_image
+        return serve_image(filename)
 
     @app.route("/import_logs/<path:filename>")
     def download_import_log(filename):

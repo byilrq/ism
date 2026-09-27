@@ -16,8 +16,6 @@ NGINX_SITE_FILE="/etc/nginx/sites-available/${SERVICE_NAME}.conf"
 NGINX_SITE_LINK="/etc/nginx/sites-enabled/${SERVICE_NAME}.conf"
 STATE_FILE="/root/.ism_install.conf"
 
-REPO_ZIP_URL="https://github.com/byilrq/ism/archive/main.zip"
-
 TMP_DIR="/tmp/ism_install"
 DB_NAME="ism"
 DB_USER="asset_user"
@@ -26,7 +24,7 @@ DB_HOST="localhost"
 
 INTERNAL_PORT="5000"
 PUBLIC_PORT="2083"
-GUNICORN_WORKERS="1"
+GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
 
 ASSET_IMG_DIR="${APP_ROOT}/app/uploads/images/assets"
 ACCESSORY_IMG_DIR="${APP_ROOT}/app/uploads/images/accessories"
@@ -224,7 +222,7 @@ install_dependencies() {
     export DEBIAN_FRONTEND=noninteractive
     info "安装依赖：MariaDB / Python / OCR / WebDAV / CloudDrive 运行库"
 
-    local pkgs="mariadb-server cron curl unzip ca-certificates jq tar fuse3 davfs2 \
+    local pkgs="acl mariadb-server cron curl unzip ca-certificates jq tar fuse3 davfs2 \
         python3 python3-venv python3-pip python3-dev \
         build-essential default-libmysqlclient-dev pkg-config \
         tesseract-ocr tesseract-ocr-chi-sim"
@@ -297,7 +295,7 @@ text = re.sub(r'^Requires=.*$', '', text, flags=re.MULTILINE)
 if f'Requires={dep_unit}' not in text:
     text = text.replace('[Service]\n', f'Requires={dep_unit}\n\n[Service]\n', 1)
 text = re.sub(r'\n{3,}', '\n\n', text)
-exec_line = f'ExecStart={venv}/bin/gunicorn --workers {workers} --bind 127.0.0.1:{port} run:app'
+exec_line = f'ExecStart={venv}/bin/gunicorn --workers {workers} --worker-class sync --threads 1 --timeout 300 --graceful-timeout 30 --bind 127.0.0.1:{port} run:app'
 text = re.sub(r'^ExecStart=.*$', exec_line, text, flags=re.MULTILINE)
 svc.write_text(text, encoding='utf-8')
 print('patched', svc)
@@ -321,7 +319,9 @@ User=root
 Group=root
 WorkingDirectory=${APP_ROOT}
 Environment=PYTHONUNBUFFERED=1
-ExecStart=${VENV_DIR}/bin/gunicorn --workers ${GUNICORN_WORKERS} --bind 127.0.0.1:${INTERNAL_PORT} run:app
+ExecStartPre=${VENV_DIR}/bin/python ${APP_ROOT}/init_db.py
+TimeoutStartSec=300
+ExecStart=${VENV_DIR}/bin/gunicorn --workers ${GUNICORN_WORKERS} --worker-class sync --threads 1 --timeout 300 --graceful-timeout 30 --bind 127.0.0.1:${INTERNAL_PORT} run:app
 Restart=always
 RestartSec=3
 
@@ -330,6 +330,7 @@ WantedBy=multi-user.target
 EOF_SYSTEMD
     systemctl daemon-reload
     systemctl enable "$SERVICE_NAME"
+    apply_image_delivery --reload
     systemctl restart "$SERVICE_NAME"
     if wait_for_port "${INTERNAL_PORT}" 15; then
         ok "systemd 服务已启动，Gunicorn 已监听 127.0.0.1:${INTERNAL_PORT}"
@@ -348,31 +349,27 @@ reset_asset_systemd_to_plain() {
 }
 
 download_files() {
-    info "下载项目文件"
+    info "读取本地完整程序包"
     rm -rf "$TMP_DIR"
     mkdir -p "$TMP_DIR"
 
-    local REPO_ZIP_URL="https://github.com/byilrq/ism/archive/main.zip"
-    curl -L --fail --retry 3 -o "$TMP_DIR/repo.zip" "$REPO_ZIP_URL"
-
-    mkdir -p "$TMP_DIR/repo_extract"
-    unzip -oq "$TMP_DIR/repo.zip" -d "$TMP_DIR/repo_extract"
-
-    local EXTRACTED_DIR=""
-    for d in "$TMP_DIR/repo_extract"/*/; do
-        EXTRACTED_DIR="$d"
-        break
-    done
+    local local_source
+    local_source="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+    if [ ! -f "${local_source}/app/image_uploads.py" ] || [ ! -f "${local_source}/run.py" ]; then
+        err "当前目录不是完整 ISM 安装包：缺少 app/image_uploads.py 或 run.py"
+        return 1
+    fi
 
     mkdir -p "$TMP_DIR/app_extract"
-    cp -a "${EXTRACTED_DIR}app/." "$TMP_DIR/app_extract/" 2>/dev/null || true
-    cp -f "${EXTRACTED_DIR}config.yaml" "$TMP_DIR/config.yaml" 2>/dev/null || true
-    cp -f "${EXTRACTED_DIR}run.py" "$TMP_DIR/run.py" 2>/dev/null || true
-    cp -f "${EXTRACTED_DIR}requirements.txt" "$TMP_DIR/requirements.txt" 2>/dev/null || true
-    cp -f "${EXTRACTED_DIR}ism_backup.py" "$TMP_DIR/ism_backup.py" 2>/dev/null || true
-    cp -f "${EXTRACTED_DIR}ism_latest.sql" "$TMP_DIR/ism_latest.sql" 2>/dev/null || true
+    cp -a "${local_source}/app/." "$TMP_DIR/app_extract/"
+    cp -f "${local_source}/config.yaml" "$TMP_DIR/config.yaml"
+    cp -f "${local_source}/run.py" "$TMP_DIR/run.py"
+    cp -f "${local_source}/requirements.txt" "$TMP_DIR/requirements.txt"
+    cp -f "${local_source}/ism_backup.py" "$TMP_DIR/ism_backup.py"
+    cp -f "${local_source}/init_db.py" "$TMP_DIR/init_db.py"
+    cp -f "${local_source}/configure_media.py" "$TMP_DIR/configure_media.py"
 
-    ok "项目文件下载完成（直接从 GitHub 仓库同步）"
+    ok "本地程序文件读取完成"
 }
 
 deploy_files() {
@@ -390,18 +387,18 @@ deploy_files() {
     cp -f "$TMP_DIR/config.yaml" "$APP_ROOT/config.yaml"
     cp -f "$TMP_DIR/run.py" "$APP_ROOT/run.py"
     cp -f "$TMP_DIR/requirements.txt" "$APP_ROOT/requirements.txt"
-    cp -f "$TMP_DIR/ism_latest.sql" "$BACKUP_FILE"
     cp -f "$TMP_DIR/ism_backup.py" "$BACKUP_SCRIPT"
     chmod +x "$BACKUP_SCRIPT"
+    cp -f "$TMP_DIR/init_db.py" "$APP_ROOT/init_db.py"
+    cp -f "$TMP_DIR/configure_media.py" "$APP_ROOT/configure_media.py"
 
     mkdir -p "$ASSET_IMG_DIR" "$ACCESSORY_IMG_DIR"
     ok "应用文件已部署"
 }
 
 sync_custom_files() {
-    info "同步仓库主文件"
-
-    ok "app 目录已全部从 GitHub 仓库部署完成"
+    info "确认本地程序文件"
+    ok "app 目录已从当前安装包部署完成"
 }
 
 setup_python_env() {
@@ -416,22 +413,21 @@ setup_python_env() {
 }
 
 setup_database() {
-    info "初始化数据库和账号"
+    info "初始化空数据库和数据库账号"
     mysql <<EOF_DB
 CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
+ALTER USER '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
 GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';
 FLUSH PRIVILEGES;
 EOF_DB
 
-    info "导入数据库备份"
-    if [ -f "$BACKUP_FILE" ]; then
-        mysql "$DB_NAME" < "$BACKUP_FILE"
-        ok "数据库已导入"
-    else
-        err "未找到备份文件：$BACKUP_FILE"
-        return 1
-    fi
+    info "按当前程序模型创建数据库表结构"
+    (
+        cd "$APP_ROOT"
+        "$VENV_DIR/bin/python" "$APP_ROOT/init_db.py"
+    )
+    ok "数据库表结构初始化完成"
 }
 
 setup_admin_user() {
@@ -443,6 +439,12 @@ DELETE FROM users WHERE username='${admin_user}';
 INSERT INTO users (username, password) VALUES ('${admin_user}', '${admin_pass}');
 EOF_ADMIN
     ok "管理员账号已创建：${admin_user}"
+}
+
+apply_image_delivery() {
+    if [ -f "${APP_ROOT}/configure_media.py" ] && [ -f "$NGINX_SITE_FILE" ] && [ -x "${VENV_DIR}/bin/python" ]; then
+        "${VENV_DIR}/bin/python" "${APP_ROOT}/configure_media.py" --root "$APP_ROOT" --site "$NGINX_SITE_FILE" --apply "$@"
+    fi
 }
 
 write_nginx_http() {
@@ -567,8 +569,9 @@ configure_nginx() {
     fi
 
     ln -sf "$NGINX_SITE_FILE" "$NGINX_SITE_LINK"
+    apply_image_delivery
     nginx -t
-    systemctl restart nginx
+    systemctl reload nginx
     sleep 1
 
     if wait_for_port "${PUBLIC_PORT}" 10; then
@@ -696,6 +699,7 @@ apply_webdav_settings() {
     write_backup_script
 
     if systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}\.service"; then
+        apply_image_delivery --reload
         systemctl restart "$SERVICE_NAME"
     fi
 
@@ -895,6 +899,7 @@ switch_to_local_storage() {
     write_backup_script
 
     if systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}\.service"; then
+        apply_image_delivery --reload
         systemctl restart "$SERVICE_NAME"
     fi
 
@@ -916,7 +921,6 @@ set_storage_mount_path() {
     echo ""
     echo "提示："
     echo "  - 如果输入的是 WebDAV/CloudDrive/rclone 挂载点，请确保已通过"
-    echo "    mount.sh 脚本完成挂载和目录创建"
     echo "  - 输入的路径必须已存在且可写"
     echo "  - 程序会在该路径下自动创建 assets/accessories/sql_backups 目录"
     echo ""
@@ -982,6 +986,7 @@ set_storage_mount_path() {
     write_backup_script
 
     if systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}\.service"; then
+        apply_image_delivery --reload
         systemctl restart "$SERVICE_NAME"
     fi
 
@@ -1096,6 +1101,7 @@ switch_to_rclone_storage() {
     write_backup_script
 
     if systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}\.service"; then
+        apply_image_delivery --reload
         systemctl restart "$SERVICE_NAME"
     fi
 
@@ -1150,6 +1156,7 @@ switch_to_clouddrive_storage() {
     write_backup_script
 
     if systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}\.service"; then
+        apply_image_delivery --reload
         systemctl restart "$SERVICE_NAME"
     fi
 
@@ -1552,16 +1559,8 @@ write_backup_script() {
 
 install_backup_cron() {
     if [ ! -f "$BACKUP_SCRIPT" ]; then
-        info "备份脚本不存在，正在从 GitHub 下载..."
-
-        local backup_script_url="https://raw.githubusercontent.com/byilrq/ism/main/ism_backup.py"
-        if curl -fsSL --retry 3 "$backup_script_url" -o "$BACKUP_SCRIPT" 2>/dev/null; then
-            chmod +x "$BACKUP_SCRIPT"
-            ok "备份脚本已下载：$BACKUP_SCRIPT"
-        else
-            err "下载备份脚本失败，请检查网络连接"
-            return 1
-        fi
+        err "未找到备份脚本：$BACKUP_SCRIPT，请重新执行本安装包的系统安装"
+        return 1
     fi
 
     info "生成 cron 自动备份任务"
@@ -1750,6 +1749,7 @@ restart_service() {
     info "重启系统"
     systemctl daemon-reload
     systemctl enable "$SERVICE_NAME"
+    apply_image_delivery --reload
     systemctl restart "$SERVICE_NAME"
     systemctl status "$SERVICE_NAME" --no-pager || true
 }
@@ -1839,20 +1839,21 @@ install_asset_system() {
     setup_admin_user "$ADMIN_USER" "$ADMIN_PASS"
 
     if [ -f "${APP_ROOT}/config.yaml" ]; then
-        python3 - "${APP_ROOT}/config.yaml" "$ADMIN_USER" "$ADMIN_PASS" <<'PY'
+        "${VENV_DIR}/bin/python" - "${APP_ROOT}/config.yaml" "$ADMIN_USER" "$ADMIN_PASS" <<'PY'
 from pathlib import Path
-import sys, re
+import sys
+import yaml
+
 config_file = Path(sys.argv[1])
 admin_user = sys.argv[2]
 admin_pass = sys.argv[3]
-text = config_file.read_text(encoding='utf-8')
-text = re.sub(r'^admin_user:.*$', f'admin_user: {admin_user}', text, flags=re.MULTILINE)
-text = re.sub(r'^admin_password:.*$', f'admin_password: {admin_pass}', text, flags=re.MULTILINE)
-if 'admin_user:' not in text:
-    text += f'\nadmin_user: {admin_user}\n'
-if 'admin_password:' not in text:
-    text += f'admin_password: {admin_pass}\n'
-config_file.write_text(text, encoding='utf-8')
+cfg = yaml.safe_load(config_file.read_text(encoding='utf-8')) or {}
+admin = cfg.setdefault('admin', {})
+admin['username'] = admin_user
+admin['password'] = admin_pass
+cfg.pop('admin_user', None)
+cfg.pop('admin_password', None)
+config_file.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding='utf-8')
 PY
     fi
 
@@ -1879,8 +1880,14 @@ confirm_install_asset_system() {
     local existing_pass=""
 
     if [ -f "${APP_ROOT}/config.yaml" ]; then
-        existing_user=$(grep -E "^admin_user:" "${APP_ROOT}/config.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d "'" | tr -d '"' || true)
-        existing_pass=$(grep -E "^admin_password:" "${APP_ROOT}/config.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d "'" | tr -d '"' || true)
+        existing_user=$(grep -A3 -E '^admin:[[:space:]]*$' "${APP_ROOT}/config.yaml" 2>/dev/null | grep -m1 -E '^[[:space:]]+username:' | sed -E 's/^[[:space:]]*username:[[:space:]]*//; s/^['"'"'](.*)['"'"']$/\1/' || true)
+        existing_pass=$(grep -A3 -E '^admin:[[:space:]]*$' "${APP_ROOT}/config.yaml" 2>/dev/null | grep -m1 -E '^[[:space:]]+password:' | sed -E 's/^[[:space:]]*password:[[:space:]]*//; s/^['"'"'](.*)['"'"']$/\1/' || true)
+        if [ -z "$existing_user" ]; then
+            existing_user=$(grep -E '^admin_user:' "${APP_ROOT}/config.yaml" 2>/dev/null | sed -E 's/^admin_user:[[:space:]]*//; s/^['"'"'](.*)['"'"']$/\1/' || true)
+        fi
+        if [ -z "$existing_pass" ]; then
+            existing_pass=$(grep -E '^admin_password:' "${APP_ROOT}/config.yaml" 2>/dev/null | sed -E 's/^admin_password:[[:space:]]*//; s/^['"'"'](.*)['"'"']$/\1/' || true)
+        fi
     fi
 
     local ADMIN_USER=""
@@ -2437,6 +2444,7 @@ EOF
     ln -sf "$NGINX_SITE_FILE" "$NGINX_SITE_LINK"
 
     # 测试配置
+    apply_image_delivery
     if ! nginx -t; then
         echo -e "${RED}❌ nginx 配置测试失败，已恢复备份。${NC}"
         cp -a "${STATE_FILE}${bak_suffix}" "$STATE_FILE" 2>/dev/null || true
@@ -2444,10 +2452,11 @@ EOF
         return 1
     fi
 
-    systemctl restart nginx
+    systemctl reload nginx
 
     # 重启 ISM 服务
     if systemctl is-enabled "$SERVICE_NAME" >/dev/null 2>&1; then
+        apply_image_delivery --reload
         systemctl restart "$SERVICE_NAME"
     fi
 
@@ -2486,7 +2495,6 @@ show_menu() {
 
     printf "${BOLD}${BLUE}-------------------------------------------------------------------------${NC}\n"
     printf "${BOLD}${YELLOW} ★ 推荐顺序：${NC}${GREEN}1 -> 2 -> 4 -> 5${NC}\n"
-    printf "${BOLD}${CYAN} ★ 说明：${NC}${WHITE}存储挂载由独立脚本 mount.sh 管理${NC}\n"
     printf "${BOLD}${BLUE}=========================================================================${NC}\n"
     printf "\n"
 }

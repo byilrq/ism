@@ -22,7 +22,9 @@ def _load_cfg():
         f"mysql+pymysql://{_mysql.get('user', 'asset_user')}:{_mysql.get('password', 'by123')}@{_mysql.get('host', 'localhost')}/{_mysql.get('database', 'ism')}"
     cfg["UPLOAD_FOLDER"] = os.environ.get("UPLOAD_FOLDER") or cfg.get("upload_folder")
     cfg["SECRET_KEY"] = os.environ.get("SECRET_KEY") or cfg["secret_key"]
-    cfg["MAX_CONTENT_LENGTH"] = os.environ.get("MAX_CONTENT_LENGTH") or cfg["max_content_length"]
+    cfg["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_CONTENT_LENGTH") or cfg["max_content_length"])
+    if cfg["MAX_CONTENT_LENGTH"] <= 0:
+        raise ValueError("MAX_CONTENT_LENGTH must be a positive number of bytes")
     cfg["BASE_DIR"] = BASE_DIR
     return cfg
 
@@ -40,14 +42,22 @@ db = SQLAlchemy()
 login_manager = LoginManager()
 login_manager.login_view = "login"
 
-def create_app():
+def create_app(test_config=None):
     app = Flask(__name__)
     app.config.from_object(FlaskConfig)
+    if test_config:
+        app.config.update(test_config)
+    app.config.setdefault("SQLALCHEMY_ENGINE_OPTIONS", {
+        "pool_pre_ping": True,
+        "pool_recycle": 1800,
+    })
 
     db.init_app(app)
     login_manager.init_app(app)
 
     from app.routes import register_routes
     register_routes(app)
+    from app.image_uploads import register_image_uploads
+    register_image_uploads(app)
 
     return app

@@ -307,11 +307,13 @@ function confirmDeleteSelected(){
         if(form){
             form.action = '/delete_selected';
             form.method = 'post';
-            form.submit();
+            window.ISMUpload.submit(form);
         }
     });
 }
 </script>
+<meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
+<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v1') }}" defer></script>
 </head>
 <body>
 <div class="wrap">

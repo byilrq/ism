@@ -16,6 +16,7 @@ from app.models import (
     AssetImage, AccessoryImage
 )
 from app import db, FlaskConfig as Config
+from app.image_uploads import update_images, finish_upload
 
 try:
     from .cable import register_cable_routes, Cable
@@ -472,10 +473,12 @@ def build_search_rows(keyword="", searched=False):
     is_group_asset_keyword = bool(re.fullmatch(r"\d{18}", keyword))
     is_group_accessory_keyword = bool(re.fullmatch(r"\d{18}-\d+", keyword))
     is_precise_group_keyword = is_group_asset_keyword or is_group_accessory_keyword
+    is_six_digit_suffix_keyword = bool(re.fullmatch(r"\d{6}", keyword))
+    is_numeric_identifier_keyword = bool(re.fullmatch(r"\d{6,}", keyword))
 
-    # 完整集团编号按完整编号检索，避免 18 位编号因后 6 位相同误命中其他主资产。
-    # 普通关键词仍保留原来的后 6 位编号检索。
-    suffix_keyword = "" if is_precise_group_keyword else (keyword[-6:] if len(keyword) >= 6 else "")
+    # 仅当用户恰好输入 6 位纯数字时，进入“编号后 6 位”严格检索模式。
+    # 7 位及以上数字不再自动截成最后 6 位，避免不同编号因尾号相同被误命中。
+    suffix_keyword = keyword if is_six_digit_suffix_keyword else ""
 
     # ---- 编号检索：内部编号 / 集团编号 精确 + 后缀 ----
     exact_assets = Asset.query.filter(
@@ -507,11 +510,12 @@ def build_search_rows(keyword="", searched=False):
 
     # 备注支持关键词模糊搜索；为避免短关键词误伤，至少连续 2 个字符才启用备注匹配。
     # 完整集团编号搜索时，只保留备注模糊匹配，不再按责任人/位置模糊匹配。
-    remark_search_enabled = len(keyword) >= 2
+    remark_search_enabled = len(keyword) >= 2 and not is_numeric_identifier_keyword
 
     # ---- 文本检索：名称 / 型号 / 责任人 / 位置 / 备注，只展示命中项本身，不展开 ----
+    # 6 位及以上纯数字按资产编号处理，不再混入文本字段模糊命中。
     text_asset_conditions = []
-    if not is_precise_group_keyword:
+    if not is_precise_group_keyword and not is_numeric_identifier_keyword:
         text_asset_conditions.extend([
             Asset.owner.like(f"%{keyword}%"),
             location_like(Asset.location, keyword),
@@ -542,11 +546,72 @@ def build_search_rows(keyword="", searched=False):
             and_(
                 or_(
                     Accessory.sub_internal_no.like(f"%{suffix_keyword}"),
+                    Accessory.sub_internal_no.like(f"%{suffix_keyword}-%"),
+                    Accessory.sub_group_no.like(f"%{suffix_keyword}"),
                     Accessory.sub_group_no.like(f"%{suffix_keyword}-%")
                 ),
                 Accessory.deleted_at.is_(None)
             )
         ).all()
+
+    # 6 位后缀严格模式：只返回编号本身符合“最后 6 位”的主设备/配件。
+    # 不解析父设备、不展开兄弟配件，也不混入名称/型号/责任人/位置/备注模糊搜索。
+    if is_six_digit_suffix_keyword:
+        strict_assets = []
+        strict_asset_ids = set()
+        for asset in exact_assets + suffix_assets:
+            if asset.id in strict_asset_ids:
+                continue
+            strict_asset_ids.add(asset.id)
+            strict_assets.append(asset)
+
+        strict_accessories = []
+        strict_accessory_ids = set()
+        for item in exact_accessories + suffix_accessories:
+            if item.id in strict_accessory_ids:
+                continue
+            strict_accessory_ids.add(item.id)
+            strict_accessories.append(item)
+
+        for asset in sorted(strict_assets, key=get_asset_sort_key):
+            rows.append({
+                "row_type": "asset",
+                "id": asset.id,
+                "type_text": "主设备",
+                "internal_no": asset.internal_no or "",
+                "group_no": asset.group_no or "",
+                "name": asset.name,
+                "model": asset.model or "",
+                "status": normalize_status_value(asset.status),
+                "owner": asset.owner or "",
+                "location": asset.location or "",
+                "location_detail_url": url_for("asset_location_detail", location=asset.location) if asset.location else "",
+                "parent_asset_id": "",
+                "accessory_count": 0,
+                "detail_url": url_for("asset_detail", asset_id=asset.id),
+                "asset_date_text": asset.asset_date.isoformat() if asset.asset_date else ""
+            })
+
+        for item in sorted(strict_accessories, key=get_accessory_suffix_sort_key):
+            rows.append({
+                "row_type": "accessory",
+                "id": item.id,
+                "type_text": "配件",
+                "internal_no": item.sub_internal_no or "",
+                "group_no": item.sub_group_no or "",
+                "name": item.name,
+                "model": item.model or "",
+                "status": normalize_status_value(item.status),
+                "owner": item.owner or "",
+                "location": item.location or "",
+                "location_detail_url": url_for("asset_location_detail", location=item.location) if item.location else "",
+                "parent_asset_id": item.parent_asset_id or resolve_parent_asset_id(item.sub_internal_no, item.sub_group_no) or "",
+                "accessory_count": 0,
+                "detail_url": url_for("accessory_detail", accessory_id=item.id),
+                "asset_date_text": item.asset_date.isoformat() if item.asset_date else ""
+            })
+
+        return rows
 
     fuzzy_accessories = Accessory.query.filter(
         and_(
@@ -560,7 +625,7 @@ def build_search_rows(keyword="", searched=False):
 
     # ---- 配件文本检索：名称 / 型号 / 责任人 / 位置 / 备注，只展示命中项本身 ----
     text_accessory_conditions = []
-    if not is_precise_group_keyword:
+    if not is_precise_group_keyword and not is_numeric_identifier_keyword:
         text_accessory_conditions.extend([
             Accessory.owner.like(f"%{keyword}%"),
             location_like(Accessory.location, keyword),
@@ -1167,9 +1232,6 @@ def process_scan_code_action(scan_mode, recognized_no, assign_location="", confi
 
 
 def register_routes(app):
-    with app.app_context():
-        AssetLocationImage.__table__.create(bind=db.engine, checkfirst=True)
-
     register_cable_routes(app)
     register_debug_routes(app)
     register_upload_routes(app)
@@ -1404,25 +1466,10 @@ def register_routes(app):
                     Accessory.query.filter(location_equals(Accessory.location, old_location)).update({"location": new_location}, synchronize_session=False)
                     AssetLocationImage.query.filter(location_equals(AssetLocationImage.location_name, old_location)).update({"location_name": new_location}, synchronize_session=False)
 
-                    for image_id in delete_image_ids:
-                        try:
-                            img_id = int(image_id)
-                        except Exception:
-                            continue
-                        img = AssetLocationImage.query.filter(AssetLocationImage.id == img_id, location_equals(AssetLocationImage.location_name, current_location)).first()
-                        if img:
-                            delete_image_file(img.image_path)
-                            db.session.delete(img)
-
-                    image_prefix = sanitize_image_prefix(current_location)
-                    for file_storage in image_files[:5]:
-                        rel = save_uploaded_image(file_storage, "asset_locations", image_prefix)
-                        if rel:
-                            db.session.add(AssetLocationImage(location_name=current_location, image_path=rel))
-
-                    trim_asset_location_images(current_location)
-                    db.session.commit()
-                    return redirect(url_for("asset_location_detail", location=current_location, saved=1))
+                    update_images(AssetLocationImage, "location_name", current_location,
+                                  image_files, "asset_locations", sanitize_image_prefix(current_location),
+                                  delete_ids=delete_image_ids, location_casefold=True)
+                    return finish_upload(url_for("asset_location_detail", location=current_location, saved=1))
                 except Exception as e:
                     db.session.rollback()
                     error = f"更新失败：{str(e)}"
@@ -1901,14 +1948,9 @@ def register_routes(app):
                                 group_no=group_no,
                                 internal_no=internal_no
                             )
-                            for file_storage in image_files[:5]:
-                                rel = save_uploaded_image(file_storage, "assets", image_filename_prefix)
-                                if rel:
-                                    db.session.add(AssetImage(asset_id=obj.id, image_path=rel))
-
-                            trim_asset_images(obj)
-                            db.session.commit()
-                            return redirect(url_for("asset_detail", asset_id=obj.id))
+                            update_images(AssetImage, "asset_id", obj.id, image_files,
+                                          "assets", image_filename_prefix)
+                            return finish_upload(url_for("asset_detail", asset_id=obj.id, saved=1))
 
                     else:
                         existing_group = Accessory.query.filter_by(sub_group_no=group_no).first() if group_no else None
@@ -1945,14 +1987,9 @@ def register_routes(app):
                                 internal_no=internal_no,
                                 parent_asset=parent_asset
                             )
-                            for file_storage in image_files[:5]:
-                                rel = save_uploaded_image(file_storage, "accessories", image_filename_prefix)
-                                if rel:
-                                    db.session.add(AccessoryImage(accessory_id=obj.id, image_path=rel))
-
-                            trim_accessory_images(obj)
-                            db.session.commit()
-                            return redirect(url_for("accessory_detail", accessory_id=obj.id))
+                            update_images(AccessoryImage, "accessory_id", obj.id, image_files,
+                                          "accessories", image_filename_prefix)
+                            return finish_upload(url_for("accessory_detail", accessory_id=obj.id, saved=1))
 
                 except Exception as e:
                     db.session.rollback()
@@ -1973,7 +2010,7 @@ def register_routes(app):
             return guard
         asset = Asset.query.get_or_404(asset_id)
         statuses = get_statuses()
-        message = ""
+        message = "主设备更新成功" if request.args.get("saved") == "1" else ""
         error = ""
 
         if request.method == "POST":
@@ -2042,25 +2079,9 @@ def register_routes(app):
                                 internal_no=asset.internal_no
                             )
 
-                            for image_id in delete_image_ids:
-                                try:
-                                    img_id = int(image_id)
-                                except:
-                                    continue
-
-                                img = AssetImage.query.filter_by(id=img_id, asset_id=asset.id).first()
-                                if img:
-                                    delete_image_file(img.image_path)
-                                    db.session.delete(img)
-
-                            for file_storage in image_files[:5]:
-                                rel = save_uploaded_image(file_storage, "assets", image_filename_prefix)
-                                if rel:
-                                    db.session.add(AssetImage(asset_id=asset.id, image_path=rel))
-
-                            trim_asset_images(asset)
-                            db.session.commit()
-                            return redirect(url_for("asset_detail", asset_id=asset.id))
+                            update_images(AssetImage, "asset_id", asset.id, image_files,
+                                          "assets", image_filename_prefix, delete_ids=delete_image_ids)
+                            return finish_upload(url_for("asset_detail", asset_id=asset.id, saved=1))
                     except Exception as e:
                         db.session.rollback()
                         error = f"更新失败：{str(e)}"
@@ -2235,7 +2256,7 @@ def register_routes(app):
             return guard
         accessory = Accessory.query.get_or_404(accessory_id)
         statuses = get_statuses()
-        message = ""
+        message = "配件更新成功" if request.args.get("saved") == "1" else ""
         error = ""
 
         if request.method == "POST":
@@ -2306,25 +2327,9 @@ def register_routes(app):
                                 parent_asset=parent_asset
                             )
 
-                            for image_id in delete_image_ids:
-                                try:
-                                    img_id = int(image_id)
-                                except:
-                                    continue
-
-                                img = AccessoryImage.query.filter_by(id=img_id, accessory_id=accessory.id).first()
-                                if img:
-                                    delete_image_file(img.image_path)
-                                    db.session.delete(img)
-
-                            for file_storage in image_files[:5]:
-                                rel = save_uploaded_image(file_storage, "accessories", image_filename_prefix)
-                                if rel:
-                                    db.session.add(AccessoryImage(accessory_id=accessory.id, image_path=rel))
-
-                            trim_accessory_images(accessory)
-                            db.session.commit()
-                            message = "配件更新成功"
+                            update_images(AccessoryImage, "accessory_id", accessory.id, image_files,
+                                          "accessories", image_filename_prefix, delete_ids=delete_image_ids)
+                            return finish_upload(url_for("accessory_detail", accessory_id=accessory.id, saved=1))
                     except Exception as e:
                         db.session.rollback()
                         error = f"更新失败：{str(e)}"

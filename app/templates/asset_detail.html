@@ -134,11 +134,11 @@ function confirmAssetSaveModal(formId){
     openDeleteModal({
         title:'确认保存',
         text:'确认保存当前修改吗？',
-        onOk: function(){ form.submit(); return true; }
+        onOk: function(){ window.ISMUpload.submit(form); return true; }
     });
 }
 function beginEdit(formId, buttonId){ const form = document.getElementById(formId); if(!form){ return false; } const fields = form.querySelectorAll('.edit-field'); fields.forEach(el => { el.disabled = false; el.classList.remove('readonly'); }); const button = document.getElementById(buttonId); if(button){ button.textContent = '确认'; button.setAttribute('data-mode', 'save'); } return false; }
-function handleEditOrSave(formId, buttonId){ const button = document.getElementById(buttonId); if(!button){ return false; } const mode = button.getAttribute('data-mode') || 'edit'; if(mode === 'save'){ const form = document.getElementById(formId); if(form){ openDeleteModal({ title:'确认保存', text:'确认保存当前修改吗？', onOk: function(){ form.submit(); return true; } }); } return false; } beginEdit(formId, buttonId); }
+function handleEditOrSave(formId, buttonId){ const button = document.getElementById(buttonId); if(!button){ return false; } const mode = button.getAttribute('data-mode') || 'edit'; if(mode === 'save'){ const form = document.getElementById(formId); if(form){ openDeleteModal({ title:'确认保存', text:'确认保存当前修改吗？', onOk: function(){ window.ISMUpload.submit(form); return true; } }); } return false; } beginEdit(formId, buttonId); }
 function focusCamera(){
     if(!scanStream){ return; }
     var videoTrack = scanStream.getVideoTracks()[0];
@@ -278,104 +278,7 @@ function submitScanPhoto(){
         if(statusEl){ statusEl.textContent = '识别请求失败'; statusEl.style.color = '#dc2626'; }
     });
 }
-function openUploadChooser(dialogId, triggerEl){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.add('show'); } }
-function closeUploadChooser(dialogId){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.remove('show'); } }
-const uploadSelectionState = window.uploadSelectionState || (window.uploadSelectionState = {});
-function getUploadInputIds(textEl, fallbackInputId){ return (textEl.dataset.inputs || fallbackInputId || '').split(',').map(item => item.trim()).filter(Boolean); }
-function makeShortUploadName(file){
-    const now = new Date();
-    const pad = n => String(n).padStart(2, '0');
-    const ms = String(now.getMilliseconds()).padStart(3, '0');
-    const timePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${ms}`;
-    const originalName = file && file.name ? file.name : '';
-    const extMatch = originalName.match(/[.]([A-Za-z0-9]+)$/);
-    const ext = extMatch ? extMatch[1].toLowerCase() : 'jpg';
-    return `${timePart}.${ext}`;
-}
-function cloneUploadFileWithShortName(file){
-    if(!file){ return file; }
-    try{
-        if(file.__shortUploadName){ return file; }
-        const newFile = new File([file], makeShortUploadName(file), { type: file.type || 'image/jpeg', lastModified: file.lastModified || Date.now() });
-        Object.defineProperty(newFile, '__shortUploadName', { value: true });
-        return newFile;
-    }catch(e){
-        return file;
-    }
-}
-function syncUploadInputs(textId, activeInputId){
-    const textEl = document.getElementById(textId);
-    if(!textEl){ return; }
-    const state = uploadSelectionState[textId] || { files: [] };
-    const inputIds = getUploadInputIds(textEl, activeInputId);
-    if(typeof DataTransfer !== 'undefined'){
-        const transfer = new DataTransfer();
-        state.files.forEach(file => transfer.items.add(file));
-        const activeInput = document.getElementById(activeInputId);
-        if(activeInput){ try{ activeInput.files = transfer.files; }catch(e){} }
-        const fileListInputs = document.querySelectorAll('input[type="file"][name="image_files"]');
-        fileListInputs.forEach(inp => {
-            if(inp !== activeInput){ try{ inp.files = new DataTransfer().files; }catch(e){} }
-        });
-    }
-}
-function renderUploadSelection(textId, activeInputId){
-    const textEl = document.getElementById(textId);
-    if(!textEl){ return; }
-    const state = uploadSelectionState[textId] || { files: [] };
-    if(state.files.length <= 0){
-        textEl.textContent = '选择图片';
-        syncUploadInputs(textId, activeInputId);
-        return;
-    }
-    textEl.innerHTML = '';
-    const summary = document.createElement('div');
-    summary.textContent = `已选 ${state.files.length} 张（最多5张）`;
-    textEl.appendChild(summary);
-    const list = document.createElement('div');
-    list.className = 'upload-preview-list';
-    state.files.forEach((file, index) => {
-        const item = document.createElement('div');
-        item.className = 'upload-preview-item';
-        const name = document.createElement('span');
-        name.className = 'upload-preview-name';
-        name.textContent = file.name || `图片${index + 1}`;
-        const remove = document.createElement('button');
-        remove.type = 'button';
-        remove.className = 'upload-remove-btn';
-        remove.setAttribute('aria-label', '删除该图片');
-        remove.textContent = '×';
-        remove.onclick = function(){ removeSelectedUploadFile(textId, index, activeInputId); };
-        item.appendChild(name);
-        item.appendChild(remove);
-        list.appendChild(item);
-    });
-    textEl.appendChild(list);
-    syncUploadInputs(textId, activeInputId);
-}
-function removeSelectedUploadFile(textId, index, activeInputId){
-    const state = uploadSelectionState[textId];
-    if(!state){ return; }
-    state.files.splice(index, 1);
-    renderUploadSelection(textId, activeInputId);
-}
-function updateSelectedFiles(inputId, textId, dialogId){
-    const input = document.getElementById(inputId);
-    const textEl = document.getElementById(textId);
-    if(!textEl){ return; }
-    const state = uploadSelectionState[textId] || (uploadSelectionState[textId] = { files: [] });
-    const incoming = input && input.files ? Array.from(input.files).map(cloneUploadFileWithShortName) : [];
-    incoming.forEach(file => {
-        if(state.files.length < 5){ state.files.push(file); }
-    });
-    if(input){ try{ input.value = ''; }catch(e){} }
-    renderUploadSelection(textId, inputId);
-    if(dialogId){ closeUploadChooser(dialogId); }
-    if(incoming.length > 0 && state.files.length >= 5){
-        const summary = textEl.querySelector('div');
-        if(summary){ summary.textContent = `已选择 ${state.files.length} 张（已达本次最多5张）`; }
-    }
-}
+
 
 
 const deleteModalState = { onOk: null, onCancel: null };
@@ -468,7 +371,7 @@ function requestDeleteWithPin(formId, message){
         if(!form){ return; }
         const pinInput = form.querySelector('input[name="delete_pin"]');
         if(pinInput){ pinInput.value = pin; }
-        form.submit();
+        window.ISMUpload.submit(form);
     });
 }
 function requestInventory(formId, message){
@@ -477,13 +380,15 @@ function requestInventory(formId, message){
         text: message || '确认更新盘点时间吗？',
         onOk:function(){
             const form = document.getElementById(formId);
-            if(form){ form.submit(); }
+            if(form){ window.ISMUpload.submit(form); }
             return true;
         }
     });
     return false;
 }
 </script>
+<meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
+<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v1') }}" defer></script>
 </head>
 <body>
 <div class="wrap">

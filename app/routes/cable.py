@@ -12,6 +12,7 @@ from openpyxl import Workbook, load_workbook
 from sqlalchemy import or_, func
 
 from app import db, FlaskConfig as Config
+from app.image_uploads import update_images, finish_upload
 
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
@@ -691,12 +692,14 @@ function confirmDeleteSelected(){
         if(form){
             form.action = '/cable/delete_selected';
             form.method = 'post';
-            form.submit();
+            window.ISMUpload.submit(form);
         }
     });
 }
 
 </script>
+<meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
+<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v1') }}" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -872,83 +875,10 @@ tbody tr:hover td{background:#eff3f7;}
 @media (max-width:768px){.wrap{padding:12px;}.card{padding:14px;margin-bottom:14px;border-radius:14px;}.grid{grid-template-columns:1fr;}.title-row{margin-bottom:12px;}.title-row .btn-back{min-width:96px;padding:10px 14px;}h2{font-size:22px;}.switch-row{gap:8px;margin-bottom:12px;}.switch-row a{flex:1 1 160px;}input,select,textarea,button{padding:10px;font-size:16px;border-radius:8px;}.upload-choice-file{padding:10px;font-size:16px;border-radius:8px;}.upload-dialog-card{border-radius:14px;padding:16px;width:min(320px,calc(100vw - 20px));top:58%;}.simple-modal{padding:16px;}.simple-modal-card{border-radius:16px;padding:18px 16px;}.simple-modal-title{font-size:20px;}.simple-modal-text{font-size:16px;}.simple-modal-input{padding:10px 12px;font-size:16px;border-radius:8px;}.simple-modal-actions button{min-width:108px;padding:10px 16px;font-size:16px;border-radius:10px;}}
 </style>
 <script>
-function openUploadChooser(dialogId, triggerEl){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.add('show'); } }
-function closeUploadChooser(dialogId){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.remove('show'); } }
 
-const uploadFileQueues = {};
-function makeShortLocalImageName(file){
-    const now = new Date();
-    const pad = value => String(value).padStart(2, '0');
-    const ms = String(now.getMilliseconds()).padStart(3, '0');
-    const timePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${ms}`;
-    const originalName = file && file.name ? file.name : '';
-    const extMatch = originalName.match(/[.]([A-Za-z0-9]+)$/);
-    const ext = extMatch ? extMatch[1].toLowerCase() : ((file.type || '').split('/')[1] || 'jpg').toLowerCase();
-    try{
-        return new File([file], `${timePart}.${ext}`, {type: file.type || 'image/jpeg', lastModified: file.lastModified || Date.now()});
-    }catch(e){
-        return file;
-    }
-}
-function syncQueuedFilesToInput(textEl, inputIds){
-    const dt = new DataTransfer();
-    (uploadFileQueues[textEl.id] || []).forEach(file => dt.items.add(file));
-    inputIds.forEach((id, index) => {
-        const input = document.getElementById(id);
-        if(!input){ return; }
-        input.files = index === 0 ? dt.files : new DataTransfer().files;
-        input.value = '';
-    });
-}
-function renderQueuedFiles(textEl, inputIds){
-    const queue = uploadFileQueues[textEl.id] || [];
-    if(queue.length === 0){
-        textEl.textContent = '未选择图片';
-        return;
-    }
-    textEl.innerHTML = `<div>已选择 ${queue.length} 张（最多5张）：</div><div class="selected-file-list"></div>`;
-    const list = textEl.querySelector('.selected-file-list');
-    queue.forEach((file, index) => {
-        const row = document.createElement('div');
-        row.className = 'selected-file-item';
-        const name = document.createElement('span');
-        name.className = 'selected-file-name';
-        name.textContent = file.name || `图片${index + 1}`;
-        const remove = document.createElement('button');
-        remove.type = 'button';
-        remove.className = 'selected-file-remove';
-        remove.textContent = '×';
-        remove.setAttribute('aria-label', '删除该图片');
-        remove.onclick = function(){
-            uploadFileQueues[textEl.id].splice(index, 1);
-            syncQueuedFilesToInput(textEl, inputIds);
-            renderQueuedFiles(textEl, inputIds);
-        };
-        row.appendChild(name);
-        row.appendChild(remove);
-        list.appendChild(row);
-    });
-}
-function updateSelectedFiles(inputId, textId, dialogId){
-    const textEl = document.getElementById(textId);
-    if(!textEl){ return; }
-    const inputIds = (textEl.dataset.inputs || inputId || '').split(',').map(item => item.trim()).filter(Boolean);
-    if(!uploadFileQueues[textId]){ uploadFileQueues[textId] = []; }
-    const input = document.getElementById(inputId);
-    const incoming = input && input.files ? Array.from(input.files) : [];
-    incoming.forEach(file => {
-        if(uploadFileQueues[textId].length < 5){
-            uploadFileQueues[textId].push(makeShortLocalImageName(file));
-        }
-    });
-    if(incoming.length > 0 && uploadFileQueues[textId].length >= 5 && incoming.length > 5){
-        alert('本次最多上传5张图片');
-    }
-    syncQueuedFilesToInput(textEl, inputIds);
-    renderQueuedFiles(textEl, inputIds);
-    if(dialogId){ closeUploadChooser(dialogId); }
-}
 </script>
+<meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
+<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v1') }}" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -1122,84 +1052,9 @@ tbody tr:hover td{background:#eff3f7;}
 @media (max-width:768px){.wrap{padding:14px 12px 20px;}.card{padding:16px;margin-bottom:14px;border-radius:14px;}.grid{grid-template-columns:1fr;}.title-row{margin-bottom:12px;}.title-row .btn-back{min-width:96px;padding:10px 14px;}h2{font-size:22px;}.switch-row{gap:8px;}.switch-row a{flex:1 1 160px;}input,select,textarea,button{padding:10px;font-size:16px;border-radius:8px;}.upload-choice-file{padding:10px;font-size:16px;border-radius:8px;}.upload-dialog-card{border-radius:14px;padding:16px;width:min(320px,calc(100vw - 20px));top:58%;}.simple-modal{padding:16px;}.simple-modal-card{border-radius:16px;padding:18px 16px;}.simple-modal-title{font-size:20px;}.simple-modal-text{font-size:16px;}.simple-modal-input{padding:10px 12px;font-size:16px;border-radius:8px;}.simple-modal-actions button{min-width:108px;padding:10px 16px;font-size:16px;border-radius:10px;}}
 </style>
 <script>
-function openUploadChooser(dialogId, triggerEl){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.add('show'); } }
-function closeUploadChooser(dialogId){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.remove('show'); } }
 
-const uploadFileQueues = {};
-function makeShortLocalImageName(file){
-    const now = new Date();
-    const pad = value => String(value).padStart(2, '0');
-    const ms = String(now.getMilliseconds()).padStart(3, '0');
-    const timePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${ms}`;
-    const originalName = file && file.name ? file.name : '';
-    const extMatch = originalName.match(/[.]([A-Za-z0-9]+)$/);
-    const ext = extMatch ? extMatch[1].toLowerCase() : ((file.type || '').split('/')[1] || 'jpg').toLowerCase();
-    try{
-        return new File([file], `${timePart}.${ext}`, {type: file.type || 'image/jpeg', lastModified: file.lastModified || Date.now()});
-    }catch(e){
-        return file;
-    }
-}
-function syncQueuedFilesToInput(textEl, inputIds){
-    const dt = new DataTransfer();
-    (uploadFileQueues[textEl.id] || []).forEach(file => dt.items.add(file));
-    inputIds.forEach((id, index) => {
-        const input = document.getElementById(id);
-        if(!input){ return; }
-        input.files = index === 0 ? dt.files : new DataTransfer().files;
-        input.value = '';
-    });
-}
-function renderQueuedFiles(textEl, inputIds){
-    const queue = uploadFileQueues[textEl.id] || [];
-    if(queue.length === 0){
-        textEl.textContent = '未选择图片';
-        return;
-    }
-    textEl.innerHTML = `<div>已选择 ${queue.length} 张（最多5张）：</div><div class="selected-file-list"></div>`;
-    const list = textEl.querySelector('.selected-file-list');
-    queue.forEach((file, index) => {
-        const row = document.createElement('div');
-        row.className = 'selected-file-item';
-        const name = document.createElement('span');
-        name.className = 'selected-file-name';
-        name.textContent = file.name || `图片${index + 1}`;
-        const remove = document.createElement('button');
-        remove.type = 'button';
-        remove.className = 'selected-file-remove';
-        remove.textContent = '×';
-        remove.setAttribute('aria-label', '删除该图片');
-        remove.onclick = function(){
-            uploadFileQueues[textEl.id].splice(index, 1);
-            syncQueuedFilesToInput(textEl, inputIds);
-            renderQueuedFiles(textEl, inputIds);
-        };
-        row.appendChild(name);
-        row.appendChild(remove);
-        list.appendChild(row);
-    });
-}
-function updateSelectedFiles(inputId, textId, dialogId){
-    const textEl = document.getElementById(textId);
-    if(!textEl){ return; }
-    const inputIds = (textEl.dataset.inputs || inputId || '').split(',').map(item => item.trim()).filter(Boolean);
-    if(!uploadFileQueues[textId]){ uploadFileQueues[textId] = []; }
-    const input = document.getElementById(inputId);
-    const incoming = input && input.files ? Array.from(input.files) : [];
-    incoming.forEach(file => {
-        if(uploadFileQueues[textId].length < 5){
-            uploadFileQueues[textId].push(makeShortLocalImageName(file));
-        }
-    });
-    if(incoming.length > 0 && uploadFileQueues[textId].length >= 5 && incoming.length > 5){
-        alert('本次最多上传5张图片');
-    }
-    syncQueuedFilesToInput(textEl, inputIds);
-    renderQueuedFiles(textEl, inputIds);
-    if(dialogId){ closeUploadChooser(dialogId); }
-}
 function beginEdit(formId, buttonId){ const form = document.getElementById(formId); if(!form){ return false; } const fields = form.querySelectorAll('.edit-field'); fields.forEach(el => { el.disabled = false; el.classList.remove('readonly'); }); const button = document.getElementById(buttonId); if(button){ button.textContent = '确认'; button.setAttribute('data-mode', 'save'); } return false; }
-function handleEditOrSave(formId, buttonId){ const button = document.getElementById(buttonId); if(!button){ return false; } const mode = button.getAttribute('data-mode') || 'edit'; if(mode === 'save'){ const form = document.getElementById(formId); if(form){ if(form.requestSubmit){ form.requestSubmit(); } else { form.submit(); } } return false; } return beginEdit(formId, buttonId); }
+function handleEditOrSave(formId, buttonId){ const button = document.getElementById(buttonId); if(!button){ return false; } const mode = button.getAttribute('data-mode') || 'edit'; if(mode === 'save'){ const form = document.getElementById(formId); if(form){ if(form.requestSubmit){ form.requestSubmit(); } else { window.ISMUpload.submit(form); } } return false; } return beginEdit(formId, buttonId); }
 
 const deleteModalState = { onOk: null, onCancel: null };
 function closeDeleteModal(){
@@ -1291,11 +1146,13 @@ function requestDeleteWithPin(formId, message){
         if(!form){ return; }
         const pinInput = form.querySelector('input[name="delete_pin"]');
         if(pinInput){ pinInput.value = pin; }
-        form.submit();
+        window.ISMUpload.submit(form);
     });
 }
 
 </script>
+<meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
+<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v1') }}" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -1430,84 +1287,11 @@ table{width:100%;border-collapse:separate;border-spacing:0;min-width:780px;}th,t
 @media (max-width:768px){.wrap{padding:14px 12px 20px;}.card{padding:16px;margin-bottom:14px;border-radius:14px;}.grid{grid-template-columns:1fr;}h2{font-size:22px;}.switch-row{gap:8px;}.switch-row a{flex:1 1 160px;}input,select,textarea,button{padding:10px;font-size:16px;border-radius:8px;}.upload-choice-file{padding:10px;font-size:16px;border-radius:8px;}.upload-dialog-card{border-radius:14px;padding:16px;width:min(320px,calc(100vw - 20px));top:58%;}.simple-modal{padding:16px;}.simple-modal-card{border-radius:16px;padding:18px 16px;}.simple-modal-title{font-size:20px;}.simple-modal-text{font-size:16px;}.simple-modal-input{padding:10px 12px;font-size:16px;border-radius:8px;}.simple-modal-actions button{min-width:108px;padding:10px 16px;font-size:16px;border-radius:10px;}}
 </style>
 <script>
-function openUploadChooser(dialogId, triggerEl){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.add('show'); } }
-function closeUploadChooser(dialogId){ const dialog = document.getElementById(dialogId); if(dialog){ dialog.classList.remove('show'); } }
 
-const uploadFileQueues = {};
-function makeShortLocalImageName(file){
-    const now = new Date();
-    const pad = value => String(value).padStart(2, '0');
-    const ms = String(now.getMilliseconds()).padStart(3, '0');
-    const timePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${ms}`;
-    const originalName = file && file.name ? file.name : '';
-    const extMatch = originalName.match(/[.]([A-Za-z0-9]+)$/);
-    const ext = extMatch ? extMatch[1].toLowerCase() : ((file.type || '').split('/')[1] || 'jpg').toLowerCase();
-    try{
-        return new File([file], `${timePart}.${ext}`, {type: file.type || 'image/jpeg', lastModified: file.lastModified || Date.now()});
-    }catch(e){
-        return file;
-    }
-}
-function syncQueuedFilesToInput(textEl, inputIds){
-    const dt = new DataTransfer();
-    (uploadFileQueues[textEl.id] || []).forEach(file => dt.items.add(file));
-    inputIds.forEach((id, index) => {
-        const input = document.getElementById(id);
-        if(!input){ return; }
-        input.files = index === 0 ? dt.files : new DataTransfer().files;
-        input.value = '';
-    });
-}
-function renderQueuedFiles(textEl, inputIds){
-    const queue = uploadFileQueues[textEl.id] || [];
-    if(queue.length === 0){
-        textEl.textContent = '未选择图片';
-        return;
-    }
-    textEl.innerHTML = `<div>已选择 ${queue.length} 张（最多5张）：</div><div class="selected-file-list"></div>`;
-    const list = textEl.querySelector('.selected-file-list');
-    queue.forEach((file, index) => {
-        const row = document.createElement('div');
-        row.className = 'selected-file-item';
-        const name = document.createElement('span');
-        name.className = 'selected-file-name';
-        name.textContent = file.name || `图片${index + 1}`;
-        const remove = document.createElement('button');
-        remove.type = 'button';
-        remove.className = 'selected-file-remove';
-        remove.textContent = '×';
-        remove.setAttribute('aria-label', '删除该图片');
-        remove.onclick = function(){
-            uploadFileQueues[textEl.id].splice(index, 1);
-            syncQueuedFilesToInput(textEl, inputIds);
-            renderQueuedFiles(textEl, inputIds);
-        };
-        row.appendChild(name);
-        row.appendChild(remove);
-        list.appendChild(row);
-    });
-}
-function updateSelectedFiles(inputId, textId, dialogId){
-    const textEl = document.getElementById(textId);
-    if(!textEl){ return; }
-    const inputIds = (textEl.dataset.inputs || inputId || '').split(',').map(item => item.trim()).filter(Boolean);
-    if(!uploadFileQueues[textId]){ uploadFileQueues[textId] = []; }
-    const input = document.getElementById(inputId);
-    const incoming = input && input.files ? Array.from(input.files) : [];
-    incoming.forEach(file => {
-        if(uploadFileQueues[textId].length < 5){
-            uploadFileQueues[textId].push(makeShortLocalImageName(file));
-        }
-    });
-    if(incoming.length > 0 && uploadFileQueues[textId].length >= 5 && incoming.length > 5){
-        alert('本次最多上传5张图片');
-    }
-    syncQueuedFilesToInput(textEl, inputIds);
-    renderQueuedFiles(textEl, inputIds);
-    if(dialogId){ closeUploadChooser(dialogId); }
-}
 function enableEdit(formId){ const form = document.getElementById(formId); const fields = form.querySelectorAll('.edit-field'); fields.forEach(el => { el.disabled = false; el.classList.remove('readonly'); }); document.getElementById(formId + '-save').style.display = 'inline-block'; document.getElementById(formId + '-edit').style.display = 'none'; }
 </script>
+<meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
+<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v1') }}" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -1535,13 +1319,6 @@ function enableEdit(formId){ const form = document.getElementById(formId); const
 
 
 def register_cable_routes(app):
-    with app.app_context():
-        Cable.__table__.create(bind=db.engine, checkfirst=True)
-        CableImage.__table__.create(bind=db.engine, checkfirst=True)
-        CableShelf.__table__.create(bind=db.engine, checkfirst=True)
-        CableShelfImage.__table__.create(bind=db.engine, checkfirst=True)
-        backfill_cable_shelves()
-
     @app.route("/cable", defaults={"scan_code": ""}, methods=["GET"])
     @app.route("/cable<scan_code>", methods=["GET"])
     def search_cables(scan_code=""):
@@ -1814,14 +1591,9 @@ def register_cable_routes(app):
                     db.session.flush()
 
                     image_prefix = build_cable_filename_prefix(stored_cable_no, name, obj.location)
-                    for file_storage in image_files[:5]:
-                        rel = save_uploaded_image(file_storage, "cable", image_prefix)
-                        if rel:
-                            db.session.add(CableImage(cable_id=obj.id, image_path=rel))
-
-                    trim_cable_images(obj)
-                    db.session.commit()
-                    return redirect(url_for("cable_detail", cable_id=obj.id))
+                    update_images(CableImage, "cable_id", obj.id, image_files,
+                                  "cable", image_prefix)
+                    return finish_upload(url_for("cable_detail", cable_id=obj.id, saved=1))
                 except Exception as e:
                     db.session.rollback()
                     error = f"保存失败：{str(e)}"
@@ -1840,7 +1612,7 @@ def register_cable_routes(app):
     @app.route("/cable/location/<int:shelf_id>", methods=["GET", "POST"])
     def cable_location_detail(shelf_id):
         shelf = CableShelf.query.get_or_404(shelf_id)
-        message = ""
+        message = "货架更新成功" if request.args.get("saved") == "1" else ""
         error = ""
 
         if request.method == "POST":
@@ -1867,24 +1639,9 @@ def register_cable_routes(app):
                         if old_location != location:
                             Cable.query.filter(location_equals(Cable.location, old_location)).update({"location": location}, synchronize_session=False)
 
-                        for image_id in delete_image_ids:
-                            try:
-                                img_id = int(image_id)
-                            except Exception:
-                                continue
-                            img = CableShelfImage.query.filter_by(id=img_id, shelf_id=shelf.id).first()
-                            if img:
-                                delete_image_file(img.image_path)
-                                db.session.delete(img)
-
-                        for file_storage in image_files[:5]:
-                            rel = save_uploaded_image(file_storage, "cable_shelf", shelf.shelf_name)
-                            if rel:
-                                db.session.add(CableShelfImage(shelf_id=shelf.id, image_path=rel))
-
-                        trim_shelf_images(shelf)
-                        db.session.commit()
-                        message = "货架更新成功"
+                        update_images(CableShelfImage, "shelf_id", shelf.id, image_files,
+                                      "cable_shelf", shelf.shelf_name, delete_ids=delete_image_ids)
+                        return finish_upload(url_for("cable_location_detail", shelf_id=shelf.id, saved=1))
                     except Exception as e:
                         db.session.rollback()
                         error = f"更新失败：{str(e)}"
@@ -1924,7 +1681,7 @@ def register_cable_routes(app):
     @app.route("/cable/<int:cable_id>", methods=["GET", "POST"])
     def cable_detail(cable_id):
         cable = Cable.query.get_or_404(cable_id)
-        message = ""
+        message = "电缆更新成功" if request.args.get("saved") == "1" else ""
         error = ""
 
         if request.method == "POST":
@@ -1966,25 +1723,9 @@ def register_cable_routes(app):
                         cable.status = normalize_empty_to_none(status)
                         cable.remark = normalize_empty_to_none(remark)
 
-                        for image_id in delete_image_ids:
-                            try:
-                                img_id = int(image_id)
-                            except Exception:
-                                continue
-                            img = CableImage.query.filter_by(id=img_id, cable_id=cable.id).first()
-                            if img:
-                                delete_image_file(img.image_path)
-                                db.session.delete(img)
-
-                        image_prefix = build_cable_filename_prefix(cable.cable_no, cable.name, cable.location)
-                        for file_storage in image_files[:5]:
-                            rel = save_uploaded_image(file_storage, "cable", image_prefix)
-                            if rel:
-                                db.session.add(CableImage(cable_id=cable.id, image_path=rel))
-
-                        trim_cable_images(cable)
-                        db.session.commit()
-                        message = "电缆更新成功"
+                        update_images(CableImage, "cable_id", cable.id, image_files,
+                                      "cable", build_cable_filename_prefix(cable.cable_no, cable.name, cable.location), delete_ids=delete_image_ids)
+                        return finish_upload(url_for("cable_detail", cable_id=cable.id, saved=1))
                     except Exception as e:
                         db.session.rollback()
                         error = f"更新失败：{str(e)}"

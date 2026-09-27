@@ -50,6 +50,8 @@ form{display:inline;}
 .modal-dialog .btn-cancel{background:linear-gradient(135deg,#8b95a1 0%,#697380 100%);flex:1;}
 .modal-dialog .btn-confirm{background:linear-gradient(135deg,#d06f72 0%,#b34f55 100%);flex:1;}
 </style>
+<meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
+<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v1') }}" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -232,7 +234,7 @@ function confirmDelete() {
 
   document.getElementById('selected-items-input').value = JSON.stringify(selectedItemsToDelete);
   document.getElementById('delete-pin-input').value = deletePin;
-  document.getElementById('recycle-delete-form').submit();
+  window.ISMUpload.submit(document.getElementById('recycle-delete-form'));
 }
 
 document.addEventListener('DOMContentLoaded', function() {

@@ -9,6 +9,7 @@ BACKUP_DIR = "/root/ism/backups"
 BACKUP_FILE = f"{BACKUP_DIR}/ism_latest.sql"
 LOG_FILE = "/var/log/ism_backup.log"
 SERVICE_NAME = "ism"
+BACKUP_RETENTION_DAYS = 90
 
 
 def log_msg(msg, level="INFO"):
@@ -108,7 +109,7 @@ def sync_to_remote(upload_folder):
 
         for old_file in Path(remote_backup_root).glob("ism_latest.*.sql"):
             mtime = datetime.fromtimestamp(old_file.stat().st_mtime)
-            if datetime.now() - mtime > timedelta(days=30):
+            if datetime.now() - mtime > timedelta(days=BACKUP_RETENTION_DAYS):
                 old_file.unlink()
                 log_msg(f"Deleted old backup: {old_file}")
 
