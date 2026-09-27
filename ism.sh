@@ -1686,19 +1686,48 @@ setup_backup() {
 restore_database() {
     if [ ! -f "$BACKUP_FILE" ]; then
         err "未找到备份文件：$BACKUP_FILE"
-        return 1
+        warn "请先把数据库备份放到：$BACKUP_FILE"
+        return 0
     fi
 
-    warn "即将使用备份文件恢复数据库：$BACKUP_FILE"
+    if [ ! -s "$BACKUP_FILE" ]; then
+        err "备份文件为空：$BACKUP_FILE"
+        return 0
+    fi
+
+    if [ ! -f "$BACKUP_SCRIPT" ]; then
+        err "未找到数据库恢复程序：$BACKUP_SCRIPT"
+        return 0
+    fi
+
+    warn "菜单 6 将完整重建数据库，当前数据库内容会被备份文件覆盖。"
+    warn "恢复文件：$BACKUP_FILE"
+    warn "流程：停止 ISM -> 重建数据库 -> 导入备份 -> 补齐新版表结构 -> 启动 ISM"
     read -e -p "输入 YES 确认恢复： " confirm_text
     if [ "${confirm_text:-}" != "YES" ]; then
         warn "已取消恢复"
         return 0
     fi
 
-    info "恢复数据库"
-    mysql "$DB_NAME" < "$BACKUP_FILE"
-    ok "数据库恢复完成"
+    info "开始完整恢复数据库"
+    local restore_python="python3"
+    if [ -x "${VENV_DIR}/bin/python" ]; then
+        restore_python="${VENV_DIR}/bin/python"
+    fi
+
+    if "$restore_python" "$BACKUP_SCRIPT" restore "$BACKUP_FILE"; then
+        ok "数据库恢复完成：$BACKUP_FILE"
+        if systemctl is-active --quiet "$SERVICE_NAME"; then
+            ok "ISM 服务已正常启动"
+        else
+            warn "数据库已恢复，但 ISM 服务当前未运行，请检查：journalctl -u ${SERVICE_NAME} -n 80 --no-pager"
+        fi
+    else
+        err "数据库恢复失败。为避免使用空库或半恢复数据库，ISM 服务保持停止状态。"
+        warn "请查看日志：$BACKUP_LOG_FILE"
+        warn "排查后可再次执行菜单 6 重试恢复。"
+    fi
+    return 0
 }
 
 uninstall_webdav() {

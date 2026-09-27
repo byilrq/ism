@@ -9,6 +9,9 @@ BACKUP_DIR = "/root/ism/backups"
 BACKUP_FILE = f"{BACKUP_DIR}/ism_latest.sql"
 LOG_FILE = "/var/log/ism_backup.log"
 SERVICE_NAME = "ism"
+APP_ROOT = "/root/ism"
+INIT_DB_SCRIPT = f"{APP_ROOT}/init_db.py"
+VENV_PYTHON = f"{APP_ROOT}/venv/bin/python"
 BACKUP_RETENTION_DAYS = 90
 
 
@@ -119,6 +122,38 @@ def sync_to_remote(upload_folder):
         return False
 
 
+def _run_init_db_after_restore():
+    init_script = Path(INIT_DB_SCRIPT)
+    if not init_script.exists():
+        log_msg(f"Post-restore initializer not found: {init_script}", "ERR")
+        return False
+
+    python_bin = VENV_PYTHON if Path(VENV_PYTHON).exists() else sys.executable
+    try:
+        result = subprocess.run(
+            [python_bin, str(init_script)],
+            cwd=APP_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=600,
+        )
+        if result.returncode != 0:
+            stdout = result.stdout.decode(errors="ignore").strip()
+            stderr = result.stderr.decode(errors="ignore").strip()
+            if stdout:
+                log_msg(f"init_db stdout: {stdout}")
+            log_msg(f"init_db failed: {stderr or 'unknown error'}", "ERR")
+            return False
+        output = result.stdout.decode(errors="ignore").strip()
+        if output:
+            log_msg(output)
+        log_msg("Post-restore database initialization completed")
+        return True
+    except Exception as e:
+        log_msg(f"Post-restore initialization error: {e}", "ERR")
+        return False
+
+
 def restore_database(db_name, db_user, backup_path=BACKUP_FILE):
     backup_file = Path(backup_path)
     if not backup_file.exists():
@@ -129,25 +164,46 @@ def restore_database(db_name, db_user, backup_path=BACKUP_FILE):
         log_msg(f"Backup file is empty: {backup_file}", "ERR")
         return False
 
+    service_stopped = False
     try:
-        subprocess.run(["systemctl", "stop", SERVICE_NAME], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(
+        stop_result = subprocess.run(
+            ["systemctl", "stop", SERVICE_NAME],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=120,
+        )
+        if stop_result.returncode not in (0, 5):
+            log_msg(
+                f"Failed to stop {SERVICE_NAME}: {stop_result.stderr.decode(errors='ignore')}",
+                "ERR",
+            )
+            return False
+        service_stopped = True
+        log_msg(f"Service stopped: {SERVICE_NAME}")
+
+        rebuild_sql = (
+            f"DROP DATABASE IF EXISTS `{db_name}`;\n"
+            f"CREATE DATABASE `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;\n"
+            f"GRANT ALL PRIVILEGES ON `{db_name}`.* TO '{db_user}'@'localhost';\n"
+            "FLUSH PRIVILEGES;\n"
+        )
+        rebuild = subprocess.run(
             ["mysql"],
-            input=(
-                f"DROP DATABASE IF EXISTS `{db_name}`;\n"
-                f"CREATE DATABASE `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;\n"
-                f"GRANT ALL PRIVILEGES ON `{db_name}`.* TO '{db_user}'@'localhost';\n"
-                "FLUSH PRIVILEGES;\n"
-            ).encode("utf-8"),
-            check=True,
+            input=rebuild_sql.encode("utf-8"),
+            stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=3600,
         )
+        if rebuild.returncode != 0:
+            log_msg(f"Database rebuild failed: {rebuild.stderr.decode(errors='ignore')}", "ERR")
+            return False
+        log_msg(f"Database recreated: {db_name}")
 
         with open(backup_file, "rb") as f:
             result = subprocess.run(
                 ["mysql", db_name],
                 stdin=f,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=3600,
             )
@@ -155,13 +211,35 @@ def restore_database(db_name, db_user, backup_path=BACKUP_FILE):
         if result.returncode != 0:
             log_msg(f"mysql restore failed: {result.stderr.decode(errors='ignore')}", "ERR")
             return False
+        log_msg(f"SQL backup imported: {backup_file}")
 
-        subprocess.run(["systemctl", "start", SERVICE_NAME], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if not _run_init_db_after_restore():
+            log_msg(
+                "Restore data was imported, but post-restore initialization failed; service remains stopped",
+                "ERR",
+            )
+            return False
+
+        start_result = subprocess.run(
+            ["systemctl", "start", SERVICE_NAME],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=300,
+        )
+        if start_result.returncode != 0:
+            log_msg(f"Failed to start {SERVICE_NAME}: {start_result.stderr.decode(errors='ignore')}", "ERR")
+            return False
+
         log_msg(f"Database restore completed: {backup_file}")
+        log_msg(f"Service started: {SERVICE_NAME}")
         return True
     except Exception as e:
-        subprocess.run(["systemctl", "start", SERVICE_NAME], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         log_msg(f"Restore error: {e}", "ERR")
+        if service_stopped:
+            log_msg(
+                f"For safety, {SERVICE_NAME} remains stopped after restore failure",
+                "ERR",
+            )
         return False
 
 
