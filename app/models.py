@@ -103,6 +103,8 @@ class DeviceChangeLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     device_type = db.Column(db.String(20), nullable=False)
     device_id = db.Column(db.Integer, nullable=True)
+    group_no = db.Column(db.String(128), nullable=True)
     asset_no = db.Column(db.String(128), nullable=False, index=True)
+    asset_name = db.Column(db.String(255), nullable=True)
     change_content = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.now, index=True)

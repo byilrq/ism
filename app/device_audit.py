@@ -37,10 +37,20 @@ def device_type_name(obj):
     return "配件" if isinstance(obj, Accessory) else "主设备"
 
 
+def device_group_no(obj):
+    if isinstance(obj, Accessory):
+        return _clean(obj.sub_group_no)
+    return _clean(obj.group_no)
+
+
 def device_asset_no(obj):
     if isinstance(obj, Accessory):
         return _clean(obj.sub_internal_no) or _clean(obj.sub_group_no) or f"ID:{obj.id}"
     return _clean(obj.internal_no) or _clean(obj.group_no) or f"ID:{obj.id}"
+
+
+def device_asset_name(obj):
+    return _clean(getattr(obj, "name", ""))
 
 
 def device_snapshot(obj):
@@ -105,7 +115,9 @@ def log_device_change(obj, content, touch_date=True):
     row = DeviceChangeLog(
         device_type=device_type_name(obj),
         device_id=getattr(obj, "id", None),
+        group_no=device_group_no(obj),
         asset_no=device_asset_no(obj),
+        asset_name=device_asset_name(obj),
         change_content=cleaned_content,
     )
     db.session.add(row)

@@ -919,19 +919,26 @@ set_storage_mount_path() {
     echo "=========================================="
     echo ""
     echo "说明："
-    echo "  1. 输入一个挂载点路径（如 /mnt/mount）"
-    echo "  2. 系统将自动设置为该路径下的 /ism_images 子目录"
-    echo "  3. 例如：输入 /mnt/mount → 实际路径为 /mnt/mount/ism_images"
+    echo "  1. 必须输入最终使用的完整绝对目录，不再自动追加 /ism_images"
+    echo "  2. 例如：输入 /mnt/rclone/ism → upload_folder 将直接设置为 /mnt/rclone/ism"
+    echo "  3. 图片、数据库轮转备份、程序代码轮转备份都保存在该目录下"
+    echo ""
+    echo "目录结构示例："
+    echo "  /mnt/rclone/ism/assets"
+    echo "  /mnt/rclone/ism/accessories"
+    echo "  /mnt/rclone/ism/sql_backups"
+    echo "  /mnt/rclone/ism/code_backups"
     echo ""
     echo "提示："
-    echo "  - 如果输入的是 WebDAV/CloudDrive/rclone 挂载点，请确保已通过"
-    echo "  - 输入的路径必须已存在且可写"
-    echo "  - 程序会在该路径下自动创建 assets/accessories/sql_backups/code_backups 目录"
+    echo "  - 路径必须是绝对路径，例如 /mnt/rclone/ism"
+    echo "  - 输入的最终目录必须已存在且可写"
+    echo "  - 如果目录位于 WebDAV/CloudDrive/rclone，请先确认挂载正常"
+    echo "  - 程序不会自动在输入路径后追加任何子目录名称"
     echo ""
     echo "=========================================="
     echo ""
 
-    read -e -p "请输入挂载点路径: " mount_input
+    read -e -p "请输入完整存储目录: " mount_input
 
     mount_input=$(echo "$mount_input" | tr -d '[:space:]')
 
@@ -940,11 +947,19 @@ set_storage_mount_path() {
         return 1
     fi
 
-    # 移除末尾的斜杠
-    mount_input="${mount_input%/}"
+    # 移除末尾的斜杠；根目录 / 保持不变
+    if [ "$mount_input" != "/" ]; then
+        mount_input="${mount_input%/}"
+    fi
+
+    if [[ "$mount_input" != /* ]]; then
+        err "必须输入绝对路径，例如：/mnt/rclone/ism"
+        return 1
+    fi
 
     if [ ! -d "$mount_input" ]; then
-        err "路径不存在或无法访问：${mount_input}"
+        err "最终存储目录不存在或无法访问：${mount_input}"
+        warn "请先确认挂载正常并创建该目录，再重新设置。"
         return 1
     fi
 
@@ -955,12 +970,12 @@ set_storage_mount_path() {
     fi
     rm -f "$mount_input/.write_test"
 
-    local upload_path="${mount_input}/ism_images"
+    local upload_path="${mount_input}"
 
     echo ""
     echo "配置信息："
-    echo "  挂载点：${mount_input}"
-    echo "  实际路径：${upload_path}"
+    echo "  最终存储目录：${upload_path}"
+    echo "  config.yaml upload_folder：${upload_path}"
     echo ""
     read -e -p "确认配置？(y/n): " confirm
 
@@ -995,8 +1010,8 @@ set_storage_mount_path() {
     fi
 
     ok "系统写入路径已设置"
-    echo "挂载点：${mount_input}"
-    echo "实际路径：${upload_path}"
+    echo "最终存储目录：${upload_path}"
+    echo "config.yaml upload_folder：${upload_path}"
     echo "备份脚本已更新：$BACKUP_SCRIPT"
 }
 

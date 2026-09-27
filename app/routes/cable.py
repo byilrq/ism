@@ -703,7 +703,7 @@ function confirmDeleteSelected(){
 </head>
 <body>
 <div class="wrap">
-    <div class="card"><div class="topbar"><div><strong>当前用户：</strong>{{ user_display }}</div><div>{% if current_user.is_authenticated %}<a class="power-link" href="/logout" title="退出登录"><button type="button" class="btn-power" aria-label="退出登录"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8"></path><path d="M7.05 5.05a9 9 0 1 0 9.9 0"></path></svg></button></a>{% endif %}</div></div></div>
+    <div class="card"><div class="topbar"><div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;"><span><strong>当前用户：</strong>{{ user_display }}</span><span style="font-size:13px;color:#6f7b88;word-break:break-all;"><strong>当前上传目录：</strong>{{ config.get('UPLOAD_FOLDER', '') }}</span></div><div>{% if current_user.is_authenticated %}<a class="power-link" href="/logout" title="退出登录"><button type="button" class="btn-power" aria-label="退出登录"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8"></path><path d="M7.05 5.05a9 9 0 1 0 9.9 0"></path></svg></button></a>{% endif %}</div></div></div>
     <div class="card">
         <div class="switch-row"><a href="/"><button type="button" class="tab-btn">仪器</button></a><a href="/cable"><button type="button" class="tab-btn tab-active-cable">电缆</button></a></div>
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
@@ -1157,7 +1157,7 @@ function requestDeleteWithPin(formId, message){
 <body>
 <div class="wrap">
     {% if page_title != "电缆详情" %}<div class="card"><div class="switch-row"><a href="/"><button type="button" class="tab-btn">资产查询</button></a><a href="/cable"><button type="button" class="tab-btn tab-active-cable">电缆查询</button></a></div></div>{% endif %}
-    <div class="card"><div><strong>当前用户：</strong>{{ user_display }}</div></div>
+    <div class="card"><div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;"><span><strong>当前用户：</strong>{{ user_display }}</span><span style="font-size:13px;color:#6f7b88;word-break:break-all;"><strong>当前上传目录：</strong>{{ config.get('UPLOAD_FOLDER', '') }}</span></div></div>
     <div class="card">
         <div class="title-row"><h2>{{ page_title }}</h2><a href="/cable"><button type="button" class="btn-back">返回</button></a></div>
         {% if message %}<div class="msg">{{ message }}</div>{% endif %}
@@ -1295,7 +1295,7 @@ function enableEdit(formId){ const form = document.getElementById(formId); const
 </head>
 <body>
 <div class="wrap">
-    <div class="card"><div><strong>当前用户：</strong>{{ user_display }}</div></div>
+    <div class="card"><div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;"><span><strong>当前用户：</strong>{{ user_display }}</span><span style="font-size:13px;color:#6f7b88;word-break:break-all;"><strong>当前上传目录：</strong>{{ config.get('UPLOAD_FOLDER', '') }}</span></div></div>
     <div class="card">
         <div class="title-row"><h2>货架详情</h2><a href="/cable"><button type="button" class="btn-back">返回</button></a></div>
         <div class="muted" style="margin-bottom:10px;">货架就是位置，修改会同步更新所有相关电缆。</div>
