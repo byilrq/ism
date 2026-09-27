@@ -13,10 +13,11 @@ from sqlalchemy import or_, func, and_
 from openpyxl import Workbook
 from app.models import (
     User, Asset, Accessory, DictOption,
-    AssetImage, AccessoryImage
+    AssetImage, AccessoryImage, DeviceChangeLog
 )
 from app import db, FlaskConfig as Config
 from app.image_uploads import update_images, finish_upload
+from app.device_audit import device_snapshot, describe_device_changes, describe_device_creation, log_device_change
 
 try:
     from .cable import register_cable_routes, Cable
@@ -1089,7 +1090,9 @@ def process_scan_code_action(scan_mode, recognized_no, assign_location="", confi
                             "message": f"是否将该资产（{accessory.sub_group_no or normalized_code}，{accessory.name or ''}）添加至本货架（{assign_location}）下？",
                             "code": normalized_code
                         }, 200
+                    before = device_snapshot(accessory)
                     accessory.location = assign_location
+                    log_device_change(accessory, describe_device_changes(before, accessory, default="更新位置"))
                     db.session.commit()
                     return {"ok": True, "action": "updated", "message": f"已更新配件位置到：{assign_location}", "code": normalized_code}, 200
                 return {"ok": True, "action": "redirect", "redirect_url": url_for("device_new", type="配件", group_no=normalized_code, location=assign_location), "message": "未找到配件，正在跳转新增", "code": normalized_code}, 200
@@ -1108,7 +1111,9 @@ def process_scan_code_action(scan_mode, recognized_no, assign_location="", confi
                             "message": f"是否将该资产（{asset.group_no or normalized_code}，{asset.name or ''}）添加至本货架（{assign_location}）下？",
                             "code": normalized_code
                         }, 200
+                    before = device_snapshot(asset)
                     asset.location = assign_location
+                    log_device_change(asset, describe_device_changes(before, asset, default="更新位置"))
                     db.session.commit()
                     return {"ok": True, "action": "updated", "message": f"已更新主设备位置到：{assign_location}", "code": normalized_code}, 200
                 return {"ok": True, "action": "redirect", "redirect_url": url_for("device_new", type="主设备", group_no=normalized_code, location=assign_location), "message": "未找到主设备，正在跳转新增", "code": normalized_code}, 200
@@ -1126,7 +1131,9 @@ def process_scan_code_action(scan_mode, recognized_no, assign_location="", confi
                         "message": f"是否将该资产（{accessory.sub_group_no or normalized_code}，{accessory.name or ''}）添加至本货架（{assign_location}）下？",
                         "code": normalized_code
                     }, 200
+                before = device_snapshot(accessory)
                 accessory.location = assign_location
+                log_device_change(accessory, describe_device_changes(before, accessory, default="更新位置"))
                 db.session.commit()
                 return {"ok": True, "action": "updated", "message": f"已更新配件位置到：{assign_location}", "code": normalized_code}, 200
 
@@ -1143,7 +1150,9 @@ def process_scan_code_action(scan_mode, recognized_no, assign_location="", confi
                         "message": f"是否将该资产（{asset.group_no or normalized_code}，{asset.name or ''}）添加至本货架（{assign_location}）下？",
                         "code": normalized_code
                     }, 200
+                before = device_snapshot(asset)
                 asset.location = assign_location
+                log_device_change(asset, describe_device_changes(before, asset, default="更新位置"))
                 db.session.commit()
                 return {"ok": True, "action": "updated", "message": f"已更新主设备位置到：{assign_location}", "code": normalized_code}, 200
 
@@ -1160,7 +1169,7 @@ def process_scan_code_action(scan_mode, recognized_no, assign_location="", confi
             if is_group_accessory_code_value(normalized_code):
                 accessory = Accessory.query.filter_by(sub_group_no=normalized_code).first()
                 if accessory:
-                    accessory.asset_date = date.today()
+                    log_device_change(accessory, "盘点")
                     db.session.commit()
                     return {"ok": True, "action": "updated", "message": f"已盘点配件：{accessory.name or normalized_code}", "code": normalized_code}, 200
                 return {"ok": True, "action": "redirect", "redirect_url": url_for("device_new", type="配件", group_no=normalized_code), "message": "未找到配件，正在跳转新增", "code": normalized_code}, 200
@@ -1168,20 +1177,20 @@ def process_scan_code_action(scan_mode, recognized_no, assign_location="", confi
             if is_group_asset_code_value(normalized_code):
                 asset = Asset.query.filter_by(group_no=normalized_code).first()
                 if asset:
-                    asset.asset_date = date.today()
+                    log_device_change(asset, "盘点")
                     db.session.commit()
                     return {"ok": True, "action": "updated", "message": f"已盘点主设备：{asset.name or normalized_code}", "code": normalized_code}, 200
                 return {"ok": True, "action": "redirect", "redirect_url": url_for("device_new", type="主设备", group_no=normalized_code), "message": "未找到主设备，正在跳转新增", "code": normalized_code}, 200
 
             accessory = Accessory.query.filter_by(sub_internal_no=normalized_code).first()
             if accessory:
-                accessory.asset_date = date.today()
+                log_device_change(accessory, "盘点")
                 db.session.commit()
                 return {"ok": True, "action": "updated", "message": f"已盘点配件：{accessory.name or normalized_code}", "code": normalized_code}, 200
 
             asset = Asset.query.filter_by(internal_no=normalized_code).first()
             if asset:
-                asset.asset_date = date.today()
+                log_device_change(asset, "盘点")
                 db.session.commit()
                 return {"ok": True, "action": "updated", "message": f"已盘点主设备：{asset.name or normalized_code}", "code": normalized_code}, 200
 
@@ -1462,8 +1471,17 @@ def register_routes(app):
                 old_location = location
                 current_location = new_location
                 try:
-                    Asset.query.filter(location_equals(Asset.location, old_location)).update({"location": new_location}, synchronize_session=False)
-                    Accessory.query.filter(location_equals(Accessory.location, old_location)).update({"location": new_location}, synchronize_session=False)
+                    affected_assets = Asset.query.filter(location_equals(Asset.location, old_location)).all()
+                    affected_accessories = Accessory.query.filter(location_equals(Accessory.location, old_location)).all()
+                    if new_location != old_location:
+                        for item in affected_assets:
+                            before = device_snapshot(item)
+                            item.location = new_location
+                            log_device_change(item, describe_device_changes(before, item, default="更新位置"))
+                        for item in affected_accessories:
+                            before = device_snapshot(item)
+                            item.location = new_location
+                            log_device_change(item, describe_device_changes(before, item, default="更新位置"))
                     AssetLocationImage.query.filter(location_equals(AssetLocationImage.location_name, old_location)).update({"location_name": new_location}, synchronize_session=False)
 
                     update_images(AssetLocationImage, "location_name", current_location,
@@ -1800,11 +1818,13 @@ def register_routes(app):
             for asset_id in asset_ids:
                 asset = Asset.query.get(asset_id)
                 if asset:
+                    log_device_change(asset, "删除设备（移入回收站）")
                     delete_asset_with_files(asset)
 
             for accessory_id in accessory_ids:
                 accessory = Accessory.query.get(accessory_id)
                 if accessory:
+                    log_device_change(accessory, "删除设备（移入回收站）")
                     delete_accessory_with_files(accessory)
 
             db.session.commit()
@@ -1948,8 +1968,9 @@ def register_routes(app):
                                 group_no=group_no,
                                 internal_no=internal_no
                             )
-                            update_images(AssetImage, "asset_id", obj.id, image_files,
-                                          "assets", image_filename_prefix)
+                            image_result = update_images(AssetImage, "asset_id", obj.id, image_files,
+                                                         "assets", image_filename_prefix)
+                            log_device_change(obj, describe_device_creation(obj, image_result))
                             return finish_upload(url_for("asset_detail", asset_id=obj.id, saved=1))
 
                     else:
@@ -1987,8 +2008,9 @@ def register_routes(app):
                                 internal_no=internal_no,
                                 parent_asset=parent_asset
                             )
-                            update_images(AccessoryImage, "accessory_id", obj.id, image_files,
-                                          "accessories", image_filename_prefix)
+                            image_result = update_images(AccessoryImage, "accessory_id", obj.id, image_files,
+                                                         "accessories", image_filename_prefix)
+                            log_device_change(obj, describe_device_creation(obj, image_result))
                             return finish_upload(url_for("accessory_detail", accessory_id=obj.id, saved=1))
 
                 except Exception as e:
@@ -2021,7 +2043,7 @@ def register_routes(app):
 
             if action == "inventory_asset":
                 try:
-                    asset.asset_date = date.today()
+                    log_device_change(asset, "盘点")
                     db.session.commit()
                     message = "主设备盘点时间已更新"
                 except Exception as e:
@@ -2065,6 +2087,7 @@ def register_routes(app):
                         elif existing_internal:
                             error = "内部编号已存在"
                         else:
+                            before = device_snapshot(asset)
                             asset.group_no = normalize_empty_to_none(group_no)
                             asset.internal_no = normalize_empty_to_none(internal_no)
                             asset.name = name
@@ -2079,8 +2102,9 @@ def register_routes(app):
                                 internal_no=asset.internal_no
                             )
 
-                            update_images(AssetImage, "asset_id", asset.id, image_files,
-                                          "assets", image_filename_prefix, delete_ids=delete_image_ids)
+                            image_result = update_images(AssetImage, "asset_id", asset.id, image_files,
+                                                         "assets", image_filename_prefix, delete_ids=delete_image_ids)
+                            log_device_change(asset, describe_device_changes(before, asset, image_result, default="保存主设备"))
                             return finish_upload(url_for("asset_detail", asset_id=asset.id, saved=1))
                     except Exception as e:
                         db.session.rollback()
@@ -2115,7 +2139,7 @@ def register_routes(app):
             return guard
         asset = Asset.query.get_or_404(asset_id)
         try:
-            asset.asset_date = date.today()
+            log_device_change(asset, "盘点")
             db.session.commit()
             return redirect(url_for("asset_detail", asset_id=asset.id))
         except Exception as e:
@@ -2132,12 +2156,23 @@ def register_routes(app):
         if delete_pin != "0819":
             return "删除失败：Pin码错误"
         try:
+            log_device_change(asset, "删除设备（移入回收站）")
             delete_asset_with_files(asset)
             db.session.commit()
             return redirect(url_for("search_assets"))
         except Exception as e:
             db.session.rollback()
             return f"删除失败：{str(e)}"
+
+    @app.route("/device_logs", methods=["GET"])
+    def device_logs():
+        guard = ensure_manage_access()
+        if guard:
+            return guard
+        logs = DeviceChangeLog.query.order_by(
+            DeviceChangeLog.created_at.desc(), DeviceChangeLog.id.desc()
+        ).limit(50).all()
+        return render_template("device_logs.html", logs=logs)
 
     @app.route("/recycle_bin", methods=["GET"])
     def recycle_bin():
@@ -2185,8 +2220,10 @@ def register_routes(app):
         asset = Asset.query.get_or_404(asset_id)
         try:
             restore_asset(asset)
+            log_device_change(asset, "恢复设备")
             for accessory in Accessory.query.filter_by(parent_asset_id=asset.id, status="已删除").all():
                 restore_accessory(accessory)
+                log_device_change(accessory, "随主设备恢复")
             db.session.commit()
             return redirect(url_for("recycle_bin"))
         except Exception as e:
@@ -2201,6 +2238,7 @@ def register_routes(app):
         accessory = Accessory.query.get_or_404(accessory_id)
         try:
             restore_accessory(accessory)
+            log_device_change(accessory, "恢复设备")
             db.session.commit()
             return redirect(url_for("recycle_bin"))
         except Exception as e:
@@ -2236,10 +2274,12 @@ def register_routes(app):
                 if row_type == "asset":
                     asset = Asset.query.get(row_id)
                     if asset:
+                        log_device_change(asset, "彻底删除设备", touch_date=False)
                         permanent_delete_asset(asset)
                 elif row_type == "accessory":
                     accessory = Accessory.query.get(row_id)
                     if accessory:
+                        log_device_change(accessory, "彻底删除设备", touch_date=False)
                         permanent_delete_accessory(accessory)
 
             db.session.commit()
@@ -2266,7 +2306,7 @@ def register_routes(app):
             action = normalize_text(request.form.get("action"))
             if action == "inventory_accessory":
                 try:
-                    accessory.asset_date = date.today()
+                    log_device_change(accessory, "盘点")
                     db.session.commit()
                     message = "配件盘点时间已更新"
                 except Exception as e:
@@ -2306,6 +2346,7 @@ def register_routes(app):
                         elif existing_internal:
                             error = "附属资产内部编号已存在"
                         else:
+                            before = device_snapshot(accessory)
                             accessory.parent_asset_id = resolve_parent_asset_id(
                                 internal_no=sub_internal_no,
                                 group_no=sub_group_no,
@@ -2327,8 +2368,9 @@ def register_routes(app):
                                 parent_asset=parent_asset
                             )
 
-                            update_images(AccessoryImage, "accessory_id", accessory.id, image_files,
-                                          "accessories", image_filename_prefix, delete_ids=delete_image_ids)
+                            image_result = update_images(AccessoryImage, "accessory_id", accessory.id, image_files,
+                                                         "accessories", image_filename_prefix, delete_ids=delete_image_ids)
+                            log_device_change(accessory, describe_device_changes(before, accessory, image_result, default="保存配件"))
                             return finish_upload(url_for("accessory_detail", accessory_id=accessory.id, saved=1))
                     except Exception as e:
                         db.session.rollback()
@@ -2366,7 +2408,7 @@ def register_routes(app):
             return guard
         accessory = Accessory.query.get_or_404(accessory_id)
         try:
-            accessory.asset_date = date.today()
+            log_device_change(accessory, "盘点")
             db.session.commit()
             return redirect(url_for("accessory_detail", accessory_id=accessory.id))
         except Exception as e:
@@ -2388,6 +2430,7 @@ def register_routes(app):
         )
         back_url = url_for("asset_detail", asset_id=resolved_parent_asset_id) if resolved_parent_asset_id else url_for("search_assets")
         try:
+            log_device_change(accessory, "删除设备（移入回收站）")
             delete_accessory_with_files(accessory)
             db.session.commit()
             return redirect(back_url)

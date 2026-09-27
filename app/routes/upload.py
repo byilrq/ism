@@ -16,6 +16,7 @@ from sqlalchemy import or_, func
 
 from app import db, FlaskConfig as Config
 from app.models import AssetImage, AccessoryImage, Asset
+from app.device_audit import device_snapshot, describe_device_changes, describe_device_creation, log_device_change
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 IMPORT_EXPORT_HEADERS = ["类型", "集团编号", "内部编号", "名称", "型号", "责任人", "位置", "时间", "状态", "备注"]
@@ -447,6 +448,7 @@ def _upsert_asset_from_row(row_data):
 
     obj = _find_existing_asset(internal_no=internal_no, group_no=group_no)
     if obj:
+        before = device_snapshot(obj)
         # 编号字段：Excel有值才覆盖，空白保留现有值
         if group_no:
             obj.group_no = group_no
@@ -458,7 +460,8 @@ def _upsert_asset_from_row(row_data):
         obj.location = _prefer_new_value(location, obj.location)
         obj.status = _prefer_new_value(status, obj.status)
         obj.remark = _prefer_new_value(remark, obj.remark)
-        obj.asset_date = _prefer_new_date(asset_date, obj.asset_date)
+        obj.asset_date = date.today()
+        log_device_change(obj, "Excel导入；" + describe_device_changes(before, obj, default="保存主设备"))
     else:
         obj = Asset(
             group_no=_normalize_empty_to_none(group_no),
@@ -466,9 +469,11 @@ def _upsert_asset_from_row(row_data):
             name=name or internal_no or group_no,
             model=model, owner=owner, location=location,
             status=status, remark=remark,
-            asset_date=asset_date or date.today(),
+            asset_date=date.today(),
         )
         db.session.add(obj)
+        db.session.flush()
+        log_device_change(obj, describe_device_creation(obj, prefix="Excel导入新增主设备"))
 
     db.session.flush()
     return obj
@@ -525,6 +530,7 @@ def _upsert_accessory_from_row(row_data, skip_auto_complete=False):
 
     obj = _find_existing_accessory(internal_no=internal_no, group_no=group_no)
     if obj:
+        before = device_snapshot(obj)
         if group_no:
             obj.sub_group_no = group_no
         if internal_no:
@@ -536,7 +542,8 @@ def _upsert_accessory_from_row(row_data, skip_auto_complete=False):
         obj.location = _prefer_new_value(location, obj.location)
         obj.status = _prefer_new_value(status, obj.status)
         obj.remark = _prefer_new_value(remark, obj.remark)
-        obj.asset_date = _prefer_new_date(asset_date, obj.asset_date)
+        obj.asset_date = date.today()
+        log_device_change(obj, "Excel导入；" + describe_device_changes(before, obj, default="保存配件"))
     else:
         obj = Accessory(
             parent_asset_id=parent_asset_id,
@@ -545,9 +552,11 @@ def _upsert_accessory_from_row(row_data, skip_auto_complete=False):
             name=name or internal_no or group_no,
             model=model, owner=owner, location=location,
             status=status, remark=remark,
-            asset_date=asset_date or date.today(),
+            asset_date=date.today(),
         )
         db.session.add(obj)
+        db.session.flush()
+        log_device_change(obj, describe_device_creation(obj, prefix="Excel导入新增配件"))
 
     db.session.flush()
     return obj

@@ -95,3 +95,14 @@ class DictOption(db.Model):
     dict_value = db.Column(db.String(100), nullable=False)
     sort_order = db.Column(db.Integer, default=0)
     is_active = db.Column(db.Boolean, default=True)
+
+
+class DeviceChangeLog(db.Model):
+    __tablename__ = "device_change_logs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    device_type = db.Column(db.String(20), nullable=False)
+    device_id = db.Column(db.Integer, nullable=True)
+    asset_no = db.Column(db.String(128), nullable=False, index=True)
+    change_content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.now, index=True)

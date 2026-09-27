@@ -237,7 +237,7 @@ function confirmDeviceSave(form){
 
 </script>
 <meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
-<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v1') }}" defer></script>
+<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v4-routefix') }}" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -248,7 +248,7 @@ function confirmDeviceSave(form){
         </div>
         <div style="color:#666;margin-bottom:10px;">内部编号和集团编号至少填写一个。选择"开箱"状态时，集团编号和内部编号均可空，内部编号留空将自动填入12位时间戳。</div>
         {% if error %}<div class="err">{{ error }}</div>{% endif %}
-        <form method="post" enctype="multipart/form-data" onsubmit="return confirmDeviceSave(this);">
+        <form method="post" action="{{ url_for('device_new') }}" enctype="multipart/form-data" onsubmit="return confirmDeviceSave(this);">
             <input type="hidden" name="parent_asset_id" value="{{ form_data.parent_asset_id }}">
             <div class="grid">
                 <div class="row">

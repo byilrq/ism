@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 import subprocess
 import sys
+import tarfile
+import yaml
 from datetime import datetime, timedelta
 from pathlib import Path
 
 CONFIG_FILE = "/root/ism/config.yaml"
 BACKUP_DIR = "/root/ism/backups"
 BACKUP_FILE = f"{BACKUP_DIR}/ism_latest.sql"
+CODE_BACKUP_FILE = f"{BACKUP_DIR}/ism_code_latest.tar.gz"
 LOG_FILE = "/var/log/ism_backup.log"
 SERVICE_NAME = "ism"
 APP_ROOT = "/root/ism"
@@ -33,30 +36,57 @@ def load_config():
 
     try:
         with open(CONFIG_FILE, encoding="utf-8") as f:
-            in_mysql_section = False
-            for line in f:
-                line = line.rstrip()
-                stripped = line.strip()
-
-                if stripped.startswith("mysql:"):
-                    in_mysql_section = True
-                elif stripped and not line.startswith(" ") and not line.startswith("\t"):
-                    in_mysql_section = False
-
-                if in_mysql_section:
-                    if stripped.startswith("database:"):
-                        db_name = stripped.split(":", 1)[1].strip().strip("'\"")
-                    elif stripped.startswith("user:"):
-                        db_user = stripped.split(":", 1)[1].strip().strip("'\"")
-                    elif stripped.startswith("password:"):
-                        db_pass = stripped.split(":", 1)[1].strip().strip("'\"")
-
-                if stripped.startswith("upload_folder:"):
-                    upload_folder = stripped.split(":", 1)[1].strip().strip("'\"")
+            cfg = yaml.safe_load(f) or {}
+        mysql_cfg = cfg.get("mysql", {}) or {}
+        db_name = str(mysql_cfg.get("database") or db_name)
+        db_user = str(mysql_cfg.get("user") or db_user)
+        db_pass = str(mysql_cfg.get("password") or db_pass)
+        upload_folder = str(cfg.get("upload_folder") or upload_folder).strip()
+        if not Path(upload_folder).is_absolute():
+            raise ValueError(f"upload_folder must be an absolute path: {upload_folder}")
     except Exception as e:
         log_msg(f"Failed to load config: {e}", "ERR")
 
     return db_name, db_user, db_pass, upload_folder
+
+
+def backup_code():
+    """Archive current runtime code/config, excluding data, venv and caches."""
+    Path(BACKUP_DIR).mkdir(parents=True, exist_ok=True)
+    tmp_file = f"{CODE_BACKUP_FILE}.tmp"
+    app_root = Path(APP_ROOT).resolve()
+    runtime_top_files = {
+        "config.yaml", "configure_media.py", "init_db.py", "ism.sh",
+        "ism_backup.py", "requirements.txt", "run.py",
+    }
+
+    def should_include(path):
+        rel = path.relative_to(app_root)
+        parts = rel.parts
+        if not parts or not path.is_file():
+            return False
+        if parts[0] == "app":
+            if len(parts) >= 2 and parts[1] == "uploads":
+                return False
+            if "__pycache__" in parts:
+                return False
+            return path.suffix.lower() not in {".pyc", ".pyo", ".log", ".tmp", ".part"}
+        return len(parts) == 1 and parts[0] in runtime_top_files
+
+    try:
+        with tarfile.open(tmp_file, "w:gz") as archive:
+            for path in sorted(app_root.rglob("*")):
+                if should_include(path):
+                    archive.add(path, arcname=str(path.relative_to(app_root)), recursive=False)
+        if Path(tmp_file).stat().st_size <= 0:
+            raise RuntimeError("code backup archive is empty")
+        Path(tmp_file).replace(CODE_BACKUP_FILE)
+        log_msg(f"Code backup completed: {CODE_BACKUP_FILE}")
+        return True
+    except Exception as e:
+        log_msg(f"Code backup error: {e}", "ERR")
+        Path(tmp_file).unlink(missing_ok=True)
+        return False
 
 
 def backup_database(db_name, db_user, db_pass):
@@ -93,28 +123,38 @@ def backup_database(db_name, db_user, db_pass):
 
 def sync_to_remote(upload_folder):
     backup_date = datetime.now().strftime("%Y.%m.%d")
-    remote_backup_root = f"{upload_folder}/sql_backups"
-    remote_backup_dated = f"{remote_backup_root}/ism_latest.{backup_date}.sql"
+    remote_sql_root = Path(upload_folder) / "sql_backups"
+    remote_code_root = Path(upload_folder) / "code_backups"
+    remote_sql_dated = remote_sql_root / f"ism_latest.{backup_date}.sql"
+    remote_code_dated = remote_code_root / f"ism_code.{backup_date}.tar.gz"
 
     try:
-        if not Path(upload_folder).exists():
-            log_msg(f"Upload folder not available: {upload_folder}")
+        upload_root = Path(upload_folder)
+        if not upload_root.exists():
+            log_msg(f"Upload folder not available: {upload_folder}", "ERR")
             return False
 
-        Path(remote_backup_root).mkdir(parents=True, exist_ok=True)
+        remote_sql_root.mkdir(parents=True, exist_ok=True)
+        remote_code_root.mkdir(parents=True, exist_ok=True)
 
-        test_file = f"{upload_folder}/.write_test"
-        Path(test_file).touch()
-        Path(test_file).unlink()
+        test_file = upload_root / ".write_test"
+        test_file.touch()
+        test_file.unlink()
 
-        subprocess.run(["cp", "-f", BACKUP_FILE, remote_backup_dated], check=True)
-        log_msg(f"Backup synced to: {remote_backup_dated}")
+        subprocess.run(["cp", "-f", BACKUP_FILE, str(remote_sql_dated)], check=True)
+        subprocess.run(["cp", "-f", CODE_BACKUP_FILE, str(remote_code_dated)], check=True)
+        log_msg(f"Database backup synced to: {remote_sql_dated}")
+        log_msg(f"Code backup synced to: {remote_code_dated}")
 
-        for old_file in Path(remote_backup_root).glob("ism_latest.*.sql"):
-            mtime = datetime.fromtimestamp(old_file.stat().st_mtime)
-            if datetime.now() - mtime > timedelta(days=BACKUP_RETENTION_DAYS):
+        cutoff = datetime.now() - timedelta(days=BACKUP_RETENTION_DAYS)
+        for old_file in remote_sql_root.glob("ism_latest.*.sql"):
+            if datetime.fromtimestamp(old_file.stat().st_mtime) < cutoff:
                 old_file.unlink()
-                log_msg(f"Deleted old backup: {old_file}")
+                log_msg(f"Deleted old database backup: {old_file}")
+        for old_file in remote_code_root.glob("ism_code.*.tar.gz"):
+            if datetime.fromtimestamp(old_file.stat().st_mtime) < cutoff:
+                old_file.unlink()
+                log_msg(f"Deleted old code backup: {old_file}")
 
         return True
     except Exception as e:
@@ -265,12 +305,21 @@ def main():
     log_msg(f"Config loaded: db={db_name}, upload_folder={upload_folder}")
 
     if not backup_database(db_name, db_user, db_pass):
-        log_msg("Backup failed", "ERR")
+        log_msg("Database backup failed", "ERR")
         log_msg("=" * 66)
         return 1
 
-    sync_to_remote(upload_folder)
-    log_msg("Backup process completed")
+    if not backup_code():
+        log_msg("Code backup failed", "ERR")
+        log_msg("=" * 66)
+        return 1
+
+    if not sync_to_remote(upload_folder):
+        log_msg("Local backups completed, but remote rotation sync failed", "ERR")
+        log_msg("=" * 66)
+        return 1
+
+    log_msg(f"Backup process completed; retention={BACKUP_RETENTION_DAYS} days")
     log_msg("=" * 66)
     return 0
 

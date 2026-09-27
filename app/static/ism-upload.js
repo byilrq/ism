@@ -184,8 +184,13 @@
             notice(form, '\u6b63\u5728\u4e0a\u4f20\u539f\u56fe\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb\u786e\u8ba4\u2026', false);
             const xhr = new XMLHttpRequest();
             form._ismXHR = xhr;
-            xhr.open((form.method || 'POST').toUpperCase(), form.action || window.location.href, true);
+            const declaredAction = form.getAttribute('action');
+            const requestTarget = new URL(declaredAction || window.location.pathname, window.location.origin);
+            requestTarget.hash = '';
+            const requestUrl = requestTarget.href;
+            xhr.open((form.method || 'POST').toUpperCase(), requestUrl, true);
             xhr.setRequestHeader('X-ISM-Upload', '1');
+            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
             xhr.setRequestHeader('Accept', 'application/json');
             xhr.timeout = 600000;
             xhr.upload.onprogress = function (event) {
@@ -212,6 +217,21 @@
                     window.location.assign(target.href);
                     return;
                 }
+                // Backward-compatible handover during a manual code replacement:
+                // an older Gunicorn process may still return a normal 303 -> HTML
+                // detail page while the new static JS is already live via Nginx.
+                // Only accept the old response as success when the final same-origin
+                // URL carries the application's explicit saved=1 marker.
+                if (xhr.status >= 200 && xhr.status < 300 && xhr.responseURL) {
+                    try {
+                        const legacyTarget = new URL(xhr.responseURL, window.location.href);
+                        if (legacyTarget.origin === window.location.origin && legacyTarget.searchParams.get('saved') === '1') {
+                            notice(form, '\u4fdd\u5b58\u6210\u529f\uff0c\u6b63\u5728\u5237\u65b0\u9875\u9762\u2026', false);
+                            window.location.assign(legacyTarget.href);
+                            return;
+                        }
+                    } catch (_) { /* fall through to the normal error path */ }
+                }
                 setBusy(form, false);
                 if (data && data.renew_token) form._ismToken = null;
                 let message = data && data.error;
@@ -222,7 +242,17 @@
                     if (error) message = error.textContent.trim();
                     if (!message && /\/login(?:\?|$)/.test(xhr.responseURL)) message = '\u767b\u5f55\u5df2\u8fc7\u671f\uff0c\u8bf7\u91cd\u65b0\u767b\u5f55\u540e\u518d\u4e0a\u4f20';
                 }
-                notice(form, message || '\u672a\u80fd\u786e\u8ba4\u4fdd\u5b58\u6210\u529f\uff0c\u8bf7\u68c0\u67e5\u8868\u5355\u6216\u7f51\u7edc\u540e\u91cd\u8bd5\uff08\u91cd\u8bd5\u4f1a\u81ea\u52a8\u9632\u91cd\u590d\uff09', true);
+                if (!message && xhr.status) {
+                    let requestPath = '';
+                    let finalPath = '';
+                    try { requestPath = new URL(requestUrl).pathname; } catch (_) {}
+                    try { finalPath = xhr.responseURL ? new URL(xhr.responseURL).pathname : ''; } catch (_) {}
+                    const routeHint = finalPath && finalPath !== requestPath
+                        ? '\uff0c\u63d0\u4ea4\u5730\u5740 ' + requestPath + '\uff0c\u6700\u7ec8\u5730\u5740 ' + finalPath
+                        : (requestPath ? '\uff0c\u63d0\u4ea4\u5730\u5740 ' + requestPath : '');
+                    message = '\u670d\u52a1\u5668\u672a\u786e\u8ba4\u4fdd\u5b58\u6210\u529f\uff08HTTP ' + xhr.status + routeHint + '\uff09\u3002\u8bf7\u91cd\u8bd5\uff1b\u91cd\u8bd5\u4f1a\u81ea\u52a8\u9632\u6b62\u540c\u4e00\u5f20\u56fe\u7247\u91cd\u590d\u4fdd\u5b58\u3002';
+                }
+                notice(form, message || '\u672a\u6536\u5230\u4fdd\u5b58\u786e\u8ba4\uff0c\u8bf7\u91cd\u8bd5\uff08\u91cd\u8bd5\u4f1a\u81ea\u52a8\u9632\u91cd\u590d\uff09', true);
             };
             xhr.send(payload);
         } catch (error) {

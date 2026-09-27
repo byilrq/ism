@@ -14,6 +14,8 @@ import re
 import shutil
 import tempfile
 import uuid
+import random
+import string
 
 from flask import (Response, abort, current_app, g, has_request_context,
                    jsonify, redirect, request, send_from_directory, session)
@@ -102,18 +104,23 @@ def _upload_root():
     return Path(current_app.config["UPLOAD_FOLDER"]).resolve()
 
 
-def _safe_image_path(relative_path):
-    """Only actual image folders are downloadable, not backups/import logs."""
+def _validate_image_relative(relative_path):
+    """Validate the database-relative image path without choosing a storage root."""
     if not isinstance(relative_path, str) or "\\" in relative_path:
         raise ValueError("Invalid image path")
     parts = relative_path.split("/")
-    if len(parts) != 2 or parts[0] not in IMAGE_SUBDIRS or parts[1] in ("", ".", ".."):
+    if len(parts) != 2 or parts[0] not in IMAGE_SUBDIRS or parts[1] in ("", ".", ".."): 
         raise ValueError("Invalid image path")
     if any(ord(c) < 32 or ord(c) == 127 for c in relative_path):
         raise ValueError("Invalid image path")
     if parts[1].rsplit(".", 1)[-1].lower() not in IMAGE_EXTENSIONS:
         raise ValueError("Unsupported image type")
-    root = _upload_root()
+    return relative_path
+
+
+def _path_under(root, relative_path):
+    relative_path = _validate_image_relative(relative_path)
+    root = Path(root).resolve()
     path = (root / relative_path).resolve()
     try:
         path.relative_to(root)
@@ -122,8 +129,53 @@ def _safe_image_path(relative_path):
     return path
 
 
+def _compatible_upload_roots():
+    """Return current root plus the historical local-root spelling.
+
+    Older ISM management scripts used /app/uploads/images while some release
+    configs used /app/uploads. Database rows store only paths such as
+    assets/foo.jpg, so a config overwrite could make every historical image
+    appear missing even though the files were still on disk. Keep both roots
+    readable without moving or renaming user files.
+    """
+    primary = _upload_root()
+    roots = [primary]
+    app_uploads = (Path(current_app.root_path).resolve() / "uploads").resolve()
+    app_images = (app_uploads / "images").resolve()
+    if primary == app_uploads:
+        roots.append(app_images)
+    elif primary == app_images:
+        roots.append(app_uploads)
+    # Preserve order and avoid duplicates. Never probe arbitrary external paths.
+    result = []
+    seen = set()
+    for root in roots:
+        key = str(root)
+        if key not in seen:
+            seen.add(key)
+            result.append(root)
+    return result
+
+
+def _safe_image_path(relative_path):
+    """Primary path used for new writes."""
+    return _path_under(_upload_root(), relative_path)
+
+
+def _existing_image_path(relative_path):
+    """Find an existing image in current or historical local storage root."""
+    relative_path = _validate_image_relative(relative_path)
+    for root in _compatible_upload_roots():
+        path = _path_under(root, relative_path)
+        if path.is_file():
+            return path, root
+    # Return the primary location for consistent missing-file handling.
+    root = _upload_root()
+    return _path_under(root, relative_path), root
+
+
 def _disk_digest(relative_path, cache):
-    path = _safe_image_path(relative_path)
+    path, _root = _existing_image_path(relative_path)
     try:
         stat = path.stat()
     except FileNotFoundError:
@@ -147,8 +199,14 @@ def _atomic_save(file_storage, subdir, prefix):
     extension = file_storage.filename.rsplit(".", 1)[-1].lower()
     if extension not in IMAGE_EXTENSIONS:
         raise ValueError("\u4ec5\u652f\u6301 JPG\u3001JPEG\u3001PNG \u548c WebP \u539f\u56fe")
-    prefix = re.sub(r"[^A-Za-z0-9_-]+", "_", str(prefix)).strip("._-")[:100] or "image"
-    filename = f"{prefix}.{datetime.now():%Y.%m.%d}.{uuid.uuid4().hex}.{extension}"
+    # Keep the historical ISM filename convention exactly:
+    # <asset/location prefix>.YYYY.MM.DD.<6 alnum>.<ext>
+    # Content deduplication is SHA-256 based and does not depend on filenames.
+    prefix = re.sub(r"[^A-Za-z0-9_-]+", "_", str(prefix)).strip("._-")
+    if not prefix:
+        prefix = "cable" if subdir in ("cable", "cable_shelf") else "asset"
+    random_part = "".join(random.choices(string.ascii_letters + string.digits, k=6))
+    filename = f"{prefix}.{datetime.now():%Y.%m.%d}.{random_part}.{extension}"
     relative = f"{subdir}/{filename}"
     path = _safe_image_path(relative)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -172,9 +230,9 @@ def _atomic_save(file_storage, subdir, prefix):
 
 
 def _schedule_delete(relative_path, recycle=False):
-    path = _safe_image_path(relative_path)
+    path, root = _existing_image_path(relative_path)
     db.session.info.setdefault("ism_delete_image_files", []).append(
-        (str(path), str(_upload_root()), relative_path, bool(recycle))
+        (str(path), str(root), relative_path, bool(recycle))
     )
 
 
@@ -240,9 +298,11 @@ def update_images(model, owner_field, owner_key, files, subdir, prefix,
         .with_for_update().execution_options(populate_existing=True)
     ).scalars())
     delete_set = {int(value) for value in delete_ids if str(value).isdigit()}
+    deleted = 0
     remaining = []
     for image in images:
         if image.id in delete_set:
+            deleted += 1
             _schedule_delete(image.image_path, recycle=True)
             db.session.delete(image)
         else:
@@ -282,11 +342,16 @@ def update_images(model, owner_field, owner_key, files, subdir, prefix,
     if has_request_context():
         g.ism_uploaded_count = getattr(g, "ism_uploaded_count", 0) + saved
         g.ism_duplicate_count = getattr(g, "ism_duplicate_count", 0) + skipped
-    return {"saved": saved, "duplicates": skipped}
+    return {"saved": saved, "duplicates": skipped, "deleted": deleted}
 
 
 def _wants_json():
-    return request.headers.get("X-ISM-Upload") == "1"
+    # Some reverse proxies/security layers may drop non-standard X-* headers.
+    # The uploader also sends Accept: application/json, so either signal is
+    # sufficient.  Returning JSON avoids an unnecessary 303 round-trip after
+    # a successful multi-megabyte upload.
+    return (request.headers.get("X-ISM-Upload") == "1"
+            or "application/json" in (request.headers.get("Accept") or "").lower())
 
 
 def _success_response(destination, repeated=False):
@@ -373,21 +438,23 @@ def serve_image(filename):
     if guard:
         return guard
     try:
-        path = _safe_image_path(filename)
+        path, actual_root = _existing_image_path(filename)
     except (TypeError, ValueError):
         abort(404)
     if not path.is_file():
         abort(404)
-    # Nginx overwrites this header for the trusted loopback upstream. Direct
-    # Flask/Gunicorn development access continues to work without Nginx.
-    if (request.headers.get("X-ISM-Accel") == "1"
-            and request.headers.get("X-ISM-Accel-Root") == sha256(str(_upload_root()).encode()).hexdigest()
+    primary_root = _upload_root()
+    # X-Accel-Redirect is configured only for the active root. Historical
+    # local-root images fall back to Flask so old and new layouts can coexist.
+    if (actual_root == primary_root
+            and request.headers.get("X-ISM-Accel") == "1"
+            and request.headers.get("X-ISM-Accel-Root") == sha256(str(primary_root).encode()).hexdigest()
             and request.remote_addr in ("127.0.0.1", "::1")):
         response = Response(mimetype=mimetypes.guess_type(path.name)[0] or "application/octet-stream")
         response.headers["X-Accel-Redirect"] = "/_ism_media/" + quote(filename, safe="/")
         response.headers["Vary"] = "Cookie"
         return response
-    response = send_from_directory(str(_upload_root()), filename, conditional=True, max_age=IMAGE_CACHE_SECONDS)
+    response = send_from_directory(str(actual_root), filename, conditional=True, max_age=IMAGE_CACHE_SECONDS)
     response.headers["Cache-Control"] = f"private, max-age={IMAGE_CACHE_SECONDS}, immutable"
     response.headers["Vary"] = "Cookie"
     response.headers["X-Content-Type-Options"] = "nosniff"

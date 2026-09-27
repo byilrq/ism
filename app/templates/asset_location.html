@@ -139,7 +139,7 @@ function enableEdit(formId){
 function confirmLocationSave(){ return confirm('确认保存货架位置和图片吗？'); }
 </script>
 <meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
-<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v1') }}" defer></script>
+<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v4-routefix') }}" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -153,7 +153,7 @@ function confirmLocationSave(){ return confirm('确认保存货架位置和图�
         <div class="muted" style="margin-bottom:10px;">货架就是位置，修改会同步更新所有相关设备。</div>
         {% if message %}<div class="msg">{{ message }}</div>{% endif %}
         {% if error %}<div class="err">{{ error }}</div>{% endif %}
-        <form id="asset-location-form" method="post" enctype="multipart/form-data" onsubmit="return confirmLocationSave()">
+        <form id="asset-location-form" method="post" action="{{ url_for('asset_location_detail', location=location) }}" enctype="multipart/form-data" onsubmit="return confirmLocationSave()">
             <input type="hidden" name="location" value="{{ location }}">
             <div class="grid">
                 <div class="row"><label>货架位置</label><input class="{{ 'edit-field readonly' if readonly else '' }}" {% if readonly %}disabled{% endif %} type="text" name="new_location" value="{{ form_data.location }}"></div>

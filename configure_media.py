@@ -164,7 +164,10 @@ def main():
     root = Path(args.root).resolve()
     site = Path(args.site).resolve(strict=True)
     config = yaml.safe_load((root / 'config.yaml').read_text()) or {}
-    uploads = Path(os.environ.get('UPLOAD_FOLDER') or config.get('upload_folder', root / 'app/uploads')).resolve()
+    configured_uploads = Path(config.get('upload_folder', root / 'app/uploads'))
+    if not configured_uploads.is_absolute():
+        raise SystemExit('config.yaml upload_folder must be an absolute path')
+    uploads = configured_uploads.resolve()
     limit = int(os.environ.get('MAX_CONTENT_LENGTH') or config.get('max_content_length', 20 * 1024 * 1024))
     nginx_info = subprocess.run(['nginx', '-V'], capture_output=True, text=True, check=True)
     info = nginx_info.stdout + nginx_info.stderr
@@ -178,16 +181,39 @@ def main():
         user_match = re.search(r'(?m)^\s*user\s+(\S+)', Path('/etc/nginx/nginx.conf').read_text())
         user = user_match.group(1).rstrip(';') if user_match else 'www-data'
         pwd.getpwnam(user)
-        if not shutil.which('setfacl'):
-            raise SystemExit('Install ACL support first: apt-get install -y acl')
-        static_ok = grant_tree(user, root / 'app/static')
-        try:
+        static_path = root / 'app/static'
+        static_path.mkdir(parents=True, exist_ok=True)
+        for name in SUBDIRS:
+            (uploads / name).mkdir(parents=True, exist_ok=True)
+
+        if shutil.which('setfacl'):
+            try:
+                static_ok = grant_tree(user, static_path)
+            except (OSError, subprocess.CalledProcessError) as exc:
+                static_ok = False
+                print('WARNING: static ACL optimization unavailable; /static stays on Flask fallback:', exc)
+            try:
+                for name in SUBDIRS:
+                    if not grant_tree(user, uploads / name):
+                        media_ok = False
+            except (OSError, subprocess.CalledProcessError) as exc:
+                media_ok = False
+                print('WARNING: image ACL optimization unavailable; /uploads stays on Flask fallback:', exc)
+        else:
+            # ACL is an optional performance enhancement, never a runtime
+            # dependency.  A manually upgraded server may not have the `acl`
+            # package.  If nginx can already read the paths, keep acceleration;
+            # otherwise remove the direct aliases and let Flask serve them.
+            probe = static_path / 'login.webp'
+            static_ok = worker_can(user, static_path, '-x') and (not probe.exists() or worker_can(user, probe, '-r'))
+            media_ok = True
             for name in SUBDIRS:
-                if not grant_tree(user, uploads / name):
+                path = uploads / name
+                if not (worker_can(user, path, '-x') and worker_can(user, path, '-r')):
                     media_ok = False
-        except (OSError, subprocess.CalledProcessError) as exc:
-            media_ok = False
-            print('WARNING: image mount permissions unavailable; uploads stay on Flask fallback:', exc)
+                    break
+            print('WARNING: setfacl not installed; ACL optimization skipped. '
+                  f'static_direct={static_ok}, image_direct={media_ok}. Flask fallback remains available.')
     patched = patch_site(original, root, uploads, limit, version,
                          '--with-http_v2_module' in info, static_ok, media_ok)
     if not args.apply:

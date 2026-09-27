@@ -15,12 +15,16 @@ def _load_cfg():
         cfg = {}
     _mysql = cfg.get("mysql", {})
     cfg.setdefault("upload_folder", os.path.join(BASE_DIR, "app", "uploads"))
+    upload_folder = str(cfg.get("upload_folder") or "").strip()
+    if not upload_folder or not os.path.isabs(upload_folder):
+        raise ValueError("config.yaml upload_folder must be an absolute path")
+    cfg["upload_folder"] = upload_folder
     cfg.setdefault("secret_key", "e345ede60e6e")
     cfg.setdefault("max_content_length", 20 * 1024 * 1024)
     cfg.setdefault("SQLALCHEMY_TRACK_MODIFICATIONS", False)
     cfg["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL") or \
         f"mysql+pymysql://{_mysql.get('user', 'asset_user')}:{_mysql.get('password', 'by123')}@{_mysql.get('host', 'localhost')}/{_mysql.get('database', 'ism')}"
-    cfg["UPLOAD_FOLDER"] = os.environ.get("UPLOAD_FOLDER") or cfg.get("upload_folder")
+    cfg["UPLOAD_FOLDER"] = cfg.get("upload_folder")
     cfg["SECRET_KEY"] = os.environ.get("SECRET_KEY") or cfg["secret_key"]
     cfg["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_CONTENT_LENGTH") or cfg["max_content_length"])
     if cfg["MAX_CONTENT_LENGTH"] <= 0:

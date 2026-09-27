@@ -699,7 +699,7 @@ function confirmDeleteSelected(){
 
 </script>
 <meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
-<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v1') }}" defer></script>
+<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v4-routefix') }}" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -878,7 +878,7 @@ tbody tr:hover td{background:#eff3f7;}
 
 </script>
 <meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
-<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v1') }}" defer></script>
+<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v4-routefix') }}" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -888,7 +888,7 @@ tbody tr:hover td{background:#eff3f7;}
         {% if message %}<div class="msg">{{ message }}</div>{% endif %}
         {% if error %}<div class="err">{{ error }}</div>{% endif %}
 
-        <form method="post" enctype="multipart/form-data">
+        <form method="post" action="{{ url_for('cable_new') }}" enctype="multipart/form-data">
             <div class="grid">
                 <div class="row"><label>电缆编号</label><input type="text" name="cable_no" value="{{ form_data.cable_no }}"></div>
                 <div class="row"><label>电缆名称</label><input type="text" name="name" value="{{ form_data.name }}"></div>
@@ -1152,7 +1152,7 @@ function requestDeleteWithPin(formId, message){
 
 </script>
 <meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
-<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v1') }}" defer></script>
+<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v4-routefix') }}" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -1162,7 +1162,7 @@ function requestDeleteWithPin(formId, message){
         <div class="title-row"><h2>{{ page_title }}</h2><a href="/cable"><button type="button" class="btn-back">返回</button></a></div>
         {% if message %}<div class="msg">{{ message }}</div>{% endif %}
         {% if error %}<div class="err">{{ error }}</div>{% endif %}
-        <form id="cable-form" method="post" enctype="multipart/form-data">
+        <form id="cable-form" method="post" action="{{ url_for('cable_detail', cable_id=cable_id) }}" enctype="multipart/form-data">
             <div class="grid">
                 <div class="row"><label>电缆编号（可空）</label><input class="{{ 'edit-field readonly' if readonly else '' }}" {% if readonly %}disabled{% endif %} type="text" name="cable_no" value="{{ form_data.cable_no }}"></div>
                 <div class="row"><label>电缆名称</label><input class="{{ 'edit-field readonly' if readonly else '' }}" {% if readonly %}disabled{% endif %} type="text" name="name" value="{{ form_data.name }}"></div>
@@ -1291,7 +1291,7 @@ table{width:100%;border-collapse:separate;border-spacing:0;min-width:780px;}th,t
 function enableEdit(formId){ const form = document.getElementById(formId); const fields = form.querySelectorAll('.edit-field'); fields.forEach(el => { el.disabled = false; el.classList.remove('readonly'); }); document.getElementById(formId + '-save').style.display = 'inline-block'; document.getElementById(formId + '-edit').style.display = 'none'; }
 </script>
 <meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
-<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v1') }}" defer></script>
+<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v4-routefix') }}" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -1301,7 +1301,7 @@ function enableEdit(formId){ const form = document.getElementById(formId); const
         <div class="muted" style="margin-bottom:10px;">货架就是位置，修改会同步更新所有相关电缆。</div>
         {% if message %}<div class="msg">{{ message }}</div>{% endif %}
         {% if error %}<div class="err">{{ error }}</div>{% endif %}
-        <form id="shelf-form" method="post" enctype="multipart/form-data">
+        <form id="shelf-form" method="post" action="{{ url_for('cable_location_detail', shelf_id=shelf_id) }}" enctype="multipart/form-data">
             <div class="grid">
                 <div class="row"><label>货架位置</label><input class="{{ 'edit-field readonly' if readonly else '' }}" {% if readonly %}disabled{% endif %} type="text" name="location" value="{{ form_data.location }}"></div>
                 <div class="row"><label>上传货架图片（最多5张）</label><div class="upload-actions"><button type="button" class="{{ 'edit-field readonly' if readonly else '' }} {% if not can_manage %}btn-disabled{% endif %}" {% if readonly or not can_manage %}disabled{% endif %} onclick=\"openUploadChooser('shelf-upload-choice-dialog', this)\">上传图片</button></div><div id="shelf-image-files-text" class="file-list" data-inputs="shelf-camera-files,shelf-file-files">未选择图片</div><div id="shelf-upload-choice-dialog" class="upload-dialog" onclick="if(event.target === this){closeUploadChooser('shelf-upload-choice-dialog');}"><div class="upload-dialog-card"><div class="upload-dialog-title">请选择上传方式</div><div class="upload-dialog-actions"><label class="upload-choice-file upload-choice-camera">拍照<input class="{{ 'edit-field readonly' if readonly else '' }}" {% if readonly or not can_manage %}disabled{% endif %} type="file" id="shelf-camera-files" name="image_files" accept="image/*" capture="environment" multiple onchange="updateSelectedFiles('shelf-camera-files', 'shelf-image-files-text', 'shelf-upload-choice-dialog')"></label><label class="upload-choice-file upload-choice-local">本地上传<input class="{{ 'edit-field readonly' if readonly else '' }}" {% if readonly or not can_manage %}disabled{% endif %} type="file" id="shelf-file-files" name="image_files" accept="image/*" multiple onchange="updateSelectedFiles('shelf-file-files', 'shelf-image-files-text', 'shelf-upload-choice-dialog')"></label><button type="button" class="btn-cancel" onclick="closeUploadChooser('shelf-upload-choice-dialog')">取消</button></div></div></div></div>
@@ -1676,6 +1676,7 @@ def register_cable_routes(app):
             readonly=True,
             images=images,
             cable_rows=cable_rows,
+            shelf_id=shelf.id,
         )
 
     @app.route("/cable/<int:cable_id>", methods=["GET", "POST"])

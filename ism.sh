@@ -26,9 +26,9 @@ INTERNAL_PORT="5000"
 PUBLIC_PORT="2083"
 GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
 
-ASSET_IMG_DIR="${APP_ROOT}/app/uploads/images/assets"
-ACCESSORY_IMG_DIR="${APP_ROOT}/app/uploads/images/accessories"
-LOCAL_UPLOAD_ROOT="${APP_ROOT}/app/uploads/images"
+ASSET_IMG_DIR="${APP_ROOT}/app/uploads/assets"
+ACCESSORY_IMG_DIR="${APP_ROOT}/app/uploads/accessories"
+LOCAL_UPLOAD_ROOT="${APP_ROOT}/app/uploads"
 
 DOMAIN=""
 DAV_URL=""
@@ -443,8 +443,12 @@ EOF_ADMIN
 
 apply_image_delivery() {
     if [ -f "${APP_ROOT}/configure_media.py" ] && [ -f "$NGINX_SITE_FILE" ] && [ -x "${VENV_DIR}/bin/python" ]; then
-        "${VENV_DIR}/bin/python" "${APP_ROOT}/configure_media.py" --root "$APP_ROOT" --site "$NGINX_SITE_FILE" --apply "$@"
+        if ! "${VENV_DIR}/bin/python" "${APP_ROOT}/configure_media.py" --root "$APP_ROOT" --site "$NGINX_SITE_FILE" --apply "$@"; then
+            warn "图片/Nginx 性能配置未应用；不影响 ISM 启动，将继续使用现有 Nginx/Flask 图片路径"
+            return 0
+        fi
     fi
+    return 0
 }
 
 write_nginx_http() {
@@ -683,7 +687,7 @@ apply_webdav_settings() {
 
     info "测试 WebDAV 目录读写并创建程序目录"
     ls -lah "$DAV_MOUNT" || true
-    mkdir -p "$DAV_UPLOAD_ROOT/assets" "$DAV_UPLOAD_ROOT/accessories" "$DAV_UPLOAD_ROOT/sql_backups"
+    mkdir -p "$DAV_UPLOAD_ROOT/assets" "$DAV_UPLOAD_ROOT/accessories" "$DAV_UPLOAD_ROOT/sql_backups" "$DAV_UPLOAD_ROOT/code_backups"
     touch "$DAV_UPLOAD_ROOT/test_write.txt"
 
     if [ -f "${APP_ROOT}/config.yaml" ]; then
@@ -715,7 +719,7 @@ prompt_webdav_install() {
     echo "1) 这里是直连网盘或存储提供的 WebDAV。"
     echo "2) 请填写 WebDAV Connection URL、Connection ID（或用户名）、Password。"
     echo "3) 程序远端默认目录固定为：/ism_images/assets 和 /ism_images/accessories。"
-    echo "4) 数据库备份会同步到：/ism_images/sql_backups/。"
+    echo "4) 数据库备份同步到：/ism_images/sql_backups/；程序代码备份同步到：/ism_images/code_backups/。"
     echo
 
     read -e -p "请输入 WebDAV Connection URL [${DAV_URL:-请从网盘后台复制}]: " input_dav_url
@@ -887,7 +891,7 @@ switch_to_local_storage() {
     stop_asset_clouddrive_bind_service
     stop_webdav_mount_service
 
-    mkdir -p "$LOCAL_UPLOAD_ROOT/assets" "$LOCAL_UPLOAD_ROOT/accessories" "$LOCAL_UPLOAD_ROOT/sql_backups"
+    mkdir -p "$LOCAL_UPLOAD_ROOT/assets" "$LOCAL_UPLOAD_ROOT/accessories" "$LOCAL_UPLOAD_ROOT/sql_backups" "$LOCAL_UPLOAD_ROOT/code_backups"
     if [ -f "${APP_ROOT}/config.yaml" ]; then
         cp -f "${APP_ROOT}/config.yaml" "${APP_ROOT}/config.yaml.bak_local_$(date +%Y%m%d_%H%M%S)"
         patch_config_upload_folder "$LOCAL_UPLOAD_ROOT"
@@ -922,7 +926,7 @@ set_storage_mount_path() {
     echo "提示："
     echo "  - 如果输入的是 WebDAV/CloudDrive/rclone 挂载点，请确保已通过"
     echo "  - 输入的路径必须已存在且可写"
-    echo "  - 程序会在该路径下自动创建 assets/accessories/sql_backups 目录"
+    echo "  - 程序会在该路径下自动创建 assets/accessories/sql_backups/code_backups 目录"
     echo ""
     echo "=========================================="
     echo ""
@@ -970,7 +974,7 @@ set_storage_mount_path() {
     stop_asset_clouddrive_bind_service
 
     # 创建目录结构
-    mkdir -p "$upload_path/assets" "$upload_path/accessories" "$upload_path/sql_backups"
+    mkdir -p "$upload_path/assets" "$upload_path/accessories" "$upload_path/sql_backups" "$upload_path/code_backups"
 
     # 更新配置文件
     if [ -f "${APP_ROOT}/config.yaml" ]; then
@@ -1085,7 +1089,7 @@ switch_to_rclone_storage() {
 
     info "检测到 ${RCLONE_MOUNT} 已挂载"
 
-    local RCLONE_UPLOAD_ROOT="${RCLONE_MOUNT}"
+    local RCLONE_UPLOAD_ROOT="${RCLONE_MOUNT}/ism_images"
     mkdir -p "$RCLONE_UPLOAD_ROOT"
 
     if [ -f "${APP_ROOT}/config.yaml" ]; then
@@ -1623,7 +1627,7 @@ delete_backup_cron() {
 }
 
 manual_backup_database() {
-    info "执行手动数据库备份"
+    info "执行手动数据库 + 程序代码备份"
     if [ ! -f "$BACKUP_SCRIPT" ]; then
         err "备份脚本不存在：$BACKUP_SCRIPT"
         return 1
@@ -1632,8 +1636,12 @@ manual_backup_database() {
     python3 "$BACKUP_SCRIPT"
 
     if [ -f "$BACKUP_FILE" ]; then
-        ok "备份完成：$BACKUP_FILE"
+        ok "数据库备份完成：$BACKUP_FILE"
         ls -lh "$BACKUP_FILE"
+        if [ -f "${BACKUP_DIR}/ism_code_latest.tar.gz" ]; then
+            ok "程序代码备份完成：${BACKUP_DIR}/ism_code_latest.tar.gz"
+            ls -lh "${BACKUP_DIR}/ism_code_latest.tar.gz"
+        fi
     else
         err "备份失败"
         return 1
@@ -1645,11 +1653,11 @@ setup_backup() {
     ensure_state_defaults
 
     while true; do
-        echo "菜单 5 - 数据库备份：管理 cron 备份任务"
+        echo "菜单 5 - 数据+代码备份：管理 cron 备份任务"
         echo "  1 = 生成/重置 cron 备份任务"
         echo "  2 = 查看 cron 任务和运行情况"
         echo "  3 = 删除 cron 备份任务"
-        echo "  4 = 手动备份数据库"
+        echo "  4 = 手动备份数据库 + 程序代码"
         echo "  0 = 返回主菜单"
         read -r -p "请选择 [1/2/3/4/0]: " backup_choice
 
@@ -1776,6 +1784,28 @@ PY
 
 restart_service() {
     info "重启系统"
+
+    # Manual upgrades usually replace /root/ism files without rewriting the
+    # existing systemd unit.  Always run the additive database initializer
+    # here so new runtime tables are present before the new Gunicorn code is
+    # started.  This is safe for existing business data.
+    if [ ! -x "${VENV_DIR}/bin/python" ]; then
+        err "Python 虚拟环境不存在：${VENV_DIR}/bin/python"
+        err "请先完成程序安装后再重启。"
+        return 1
+    fi
+    if [ ! -f "${APP_ROOT}/init_db.py" ]; then
+        err "缺少数据库初始化文件：${APP_ROOT}/init_db.py"
+        return 1
+    fi
+
+    info "检查并补齐数据库表结构"
+    if ! (cd "$APP_ROOT" && "${VENV_DIR}/bin/python" "${APP_ROOT}/init_db.py"); then
+        err "数据库表结构初始化失败，已取消重启，避免新程序在旧表结构上运行。"
+        return 1
+    fi
+    ok "数据库表结构检查完成"
+
     systemctl daemon-reload
     systemctl enable "$SERVICE_NAME"
     apply_image_delivery --reload
@@ -2016,7 +2046,7 @@ check_connectivity() {
                 return 1
             fi
 
-            mkdir -p "$DAV_UPLOAD_ROOT/assets" "$DAV_UPLOAD_ROOT/accessories" "$DAV_UPLOAD_ROOT/sql_backups"
+            mkdir -p "$DAV_UPLOAD_ROOT/assets" "$DAV_UPLOAD_ROOT/accessories" "$DAV_UPLOAD_ROOT/sql_backups" "$DAV_UPLOAD_ROOT/code_backups"
             touch "$DAV_UPLOAD_ROOT/.webdav_probe_${probe_ts}"
             touch "$DAV_UPLOAD_ROOT/sql_backups/.sql_backup_probe_${probe_ts}"
 
@@ -2049,7 +2079,7 @@ check_connectivity() {
                 return 1
             fi
 
-            mkdir -p "$CLOUDDRIVE_SOURCE/assets" "$CLOUDDRIVE_SOURCE/accessories" "$CLOUDDRIVE_SOURCE/sql_backups"
+            mkdir -p "$CLOUDDRIVE_SOURCE/assets" "$CLOUDDRIVE_SOURCE/accessories" "$CLOUDDRIVE_SOURCE/sql_backups" "$CLOUDDRIVE_SOURCE/code_backups"
             touch "$CLOUDDRIVE_SOURCE/.clouddrive_source_probe_${probe_ts}"
             touch "$CLOUDDRIVE_SOURCE/sql_backups/.sql_backup_probe_${probe_ts}"
 
@@ -2060,7 +2090,7 @@ check_connectivity() {
 
             mkdir -p "$DAV_UPLOAD_ROOT"
             if mountpoint -q "$DAV_UPLOAD_ROOT"; then
-                mkdir -p "$DAV_UPLOAD_ROOT/assets" "$DAV_UPLOAD_ROOT/accessories" "$DAV_UPLOAD_ROOT/sql_backups"
+                mkdir -p "$DAV_UPLOAD_ROOT/assets" "$DAV_UPLOAD_ROOT/accessories" "$DAV_UPLOAD_ROOT/sql_backups" "$DAV_UPLOAD_ROOT/code_backups"
                 touch "$DAV_UPLOAD_ROOT/.clouddrive_bind_probe_${probe_ts}"
                 touch "$DAV_UPLOAD_ROOT/sql_backups/.sql_backup_probe_${probe_ts}"
                 ok "CloudDrive 连通性检测通过"
@@ -2084,7 +2114,7 @@ check_connectivity() {
             fi
 
             local RCLONE_UPLOAD_ROOT="${RCLONE_MOUNT}/ism_images"
-            mkdir -p "$RCLONE_UPLOAD_ROOT/assets" "$RCLONE_UPLOAD_ROOT/accessories" "$RCLONE_UPLOAD_ROOT/sql_backups"
+            mkdir -p "$RCLONE_UPLOAD_ROOT/assets" "$RCLONE_UPLOAD_ROOT/accessories" "$RCLONE_UPLOAD_ROOT/sql_backups" "$RCLONE_UPLOAD_ROOT/code_backups"
             touch "$RCLONE_UPLOAD_ROOT/.rclone_probe_${probe_ts}"
             touch "$RCLONE_UPLOAD_ROOT/sql_backups/.sql_backup_probe_${probe_ts}"
             ok "rclone 存储检测通过"
@@ -2108,7 +2138,7 @@ check_connectivity() {
                 return 1
             fi
 
-            mkdir -p "$custom_path/assets" "$custom_path/accessories" "$custom_path/sql_backups"
+            mkdir -p "$custom_path/assets" "$custom_path/accessories" "$custom_path/sql_backups" "$custom_path/code_backups"
             touch "$custom_path/.custom_probe_${probe_ts}"
             touch "$custom_path/sql_backups/.sql_backup_probe_${probe_ts}"
             ok "自定义存储路径检测通过"
@@ -2118,7 +2148,7 @@ check_connectivity() {
 
         local)
             info "检测本地存储目录"
-            mkdir -p "$LOCAL_UPLOAD_ROOT/assets" "$LOCAL_UPLOAD_ROOT/accessories" "$LOCAL_UPLOAD_ROOT/sql_backups"
+            mkdir -p "$LOCAL_UPLOAD_ROOT/assets" "$LOCAL_UPLOAD_ROOT/accessories" "$LOCAL_UPLOAD_ROOT/sql_backups" "$LOCAL_UPLOAD_ROOT/code_backups"
             touch "$LOCAL_UPLOAD_ROOT/.local_probe_${probe_ts}"
             touch "$LOCAL_UPLOAD_ROOT/sql_backups/.sql_backup_probe_${probe_ts}"
             ok "本地存储检测通过"
@@ -2516,7 +2546,7 @@ show_menu() {
 
     printf "${BOLD}${CYAN} [3] 重启系统${NC}              ${WHITE}重启 ism 服务${NC}\n"
     printf "${BOLD}${CYAN} [4] 存储路径设置${NC}          ${WHITE}设置挂载路径并检测连通性${NC}\n"
-    printf "${BOLD}${YELLOW} [5] 数据库备份（cron）${NC}      ${WHITE}生成、查看、删除数据库备份 cron${NC}\n"
+    printf "${BOLD}${YELLOW} [5] 数据+代码备份（cron）${NC}      ${WHITE}生成、查看、删除数据库+程序代码备份 cron${NC}\n"
     printf "${BOLD}${MAGENTA} [6] 恢复数据库 ${NC}            ${WHITE}从本地最新备份恢复数据库${NC}\n"
     printf "${BOLD}${GREEN} [7] 更新域名${NC}              ${WHITE}更换域名并自动申请/更新 Let's Encrypt 证书${NC}\n"
     printf "${BOLD}${RED} [8] 卸载系统${NC}              ${YELLOW}卸载整个 ISM 系统（保留 nginx/MariaDB）${NC}\n"
