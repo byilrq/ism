@@ -2,6 +2,7 @@
 import subprocess
 import sys
 import tarfile
+import json
 from datetime import datetime, timedelta
 
 try:
@@ -25,6 +26,7 @@ APP_ROOT = "/root/ism"
 INIT_DB_SCRIPT = f"{APP_ROOT}/init_db.py"
 VENV_PYTHON = f"{APP_ROOT}/venv/bin/python"
 BACKUP_RETENTION_DAYS = 90
+BACKUP_STATUS_FILE = f"{BACKUP_DIR}/backup_status.json"
 
 
 def log_msg(msg, level="INFO"):
@@ -35,6 +37,36 @@ def log_msg(msg, level="INFO"):
     Path(LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(full_msg + "\n")
+
+def _read_backup_status():
+    try:
+        with open(BACKUP_STATUS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def write_backup_status(success, upload_folder, error=""):
+    """Persist latest attempt without erasing the previous successful timestamp on failure."""
+    try:
+        Path(BACKUP_DIR).mkdir(parents=True, exist_ok=True)
+        state = _read_backup_status()
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        state["last_attempt_at"] = now
+        state["last_result"] = "success" if success else "failed"
+        state["configured_target"] = str(upload_folder or "")
+        state["last_error"] = "" if success else str(error or "backup failed")[:1000]
+        if success:
+            state["last_success_at"] = now
+            state["last_success_target"] = str(upload_folder or "")
+        tmp = Path(f"{BACKUP_STATUS_FILE}.tmp")
+        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(BACKUP_STATUS_FILE)
+    except Exception as exc:
+        # Status reporting must never make a valid backup fail.
+        log_msg(f"Backup status write failed: {exc}", "ERR")
+
 
 
 def load_config():
@@ -152,6 +184,12 @@ def sync_to_remote(upload_folder):
 
         subprocess.run(["cp", "-f", BACKUP_FILE, str(remote_sql_dated)], check=True)
         subprocess.run(["cp", "-f", CODE_BACKUP_FILE, str(remote_code_dated)], check=True)
+        if (not remote_sql_dated.exists() or
+                remote_sql_dated.stat().st_size != Path(BACKUP_FILE).stat().st_size):
+            raise RuntimeError(f"database backup verification failed: {remote_sql_dated}")
+        if (not remote_code_dated.exists() or
+                remote_code_dated.stat().st_size != Path(CODE_BACKUP_FILE).stat().st_size):
+            raise RuntimeError(f"code backup verification failed: {remote_code_dated}")
         log_msg(f"Database backup synced to: {remote_sql_dated}")
         log_msg(f"Code backup synced to: {remote_code_dated}")
 
@@ -335,21 +373,31 @@ def main():
 
     log_msg("Starting database backup")
     log_msg(f"Config loaded: db={db_name}, upload_folder={upload_folder}")
+    # Mark the newest attempt unconfirmed first. If the process is interrupted,
+    # the web header stays red and the previous successful date is preserved.
+    write_backup_status(False, upload_folder, "backup in progress or not yet confirmed")
 
     if not backup_database(db_name, db_user, db_pass):
+        write_backup_status(False, upload_folder, "database backup failed")
         log_msg("Database backup failed", "ERR")
         log_msg("=" * 66)
         return 1
 
     if not backup_code():
+        write_backup_status(False, upload_folder, "code backup failed")
         log_msg("Code backup failed", "ERR")
         log_msg("=" * 66)
         return 1
 
     if not sync_to_remote(upload_folder):
+        write_backup_status(False, upload_folder, "backup sync to configured upload_folder failed")
         log_msg("Local backups completed, but remote rotation sync failed", "ERR")
         log_msg("=" * 66)
         return 1
+
+    # The web header represents whether database+code snapshots reached the configured path.
+    # Only a successful sync advances the displayed success date.
+    write_backup_status(True, upload_folder)
 
     if not cleanup_recycle_after_backup():
         log_msg("Snapshots completed, but recycle cleanup failed", "ERR")

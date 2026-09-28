@@ -24,7 +24,7 @@ DB_PASS="by123"
 DB_HOST="localhost"
 
 INTERNAL_PORT="5000"
-PUBLIC_PORT="2083"
+PUBLIC_PORT="8183"
 GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
 
 ASSET_IMG_DIR="${APP_ROOT}/app/uploads/assets"
@@ -88,6 +88,21 @@ ok() { green "[OK] $*"; }
 warn() { yellow "[WARN] $*"; }
 err() { red "[ERR] $*"; }
 
+valid_tcp_port() {
+    local port="${1:-}"
+    [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
+}
+
+https_access_url() {
+    local domain="${1:-}"
+    local port="${2:-8183}"
+    if [ "$port" = "443" ]; then
+        printf 'https://%s' "$domain"
+    else
+        printf 'https://%s:%s' "$domain" "$port"
+    fi
+}
+
 require_root() {
     if [ "$(id -u)" -ne 0 ]; then
         err "请使用 root 运行：sudo bash ISM.sh"
@@ -139,7 +154,7 @@ recompute_dav_paths() {
 }
 
 ensure_state_defaults() {
-    : "${PUBLIC_PORT:=2083}"
+    : "${PUBLIC_PORT:=8183}"
     : "${DAV_URL:=}"
     : "${DAV_MOUNT:=/mnt/webdav_mount}"
     : "${DAV_REMOTE_ROOT:=ism_images}"
@@ -527,12 +542,13 @@ configure_nginx() {
 
     echo
     echo "请选择访问方式："
-    echo "  1 = 2083（独立端口，访问 https://域名:2083）"
+    echo "  1 = 独立 Nginx HTTPS 端口（默认 8183，可配置）"
+    echo "      默认访问：https://域名:8183；输入 443 时直接 https://域名"
     echo "  2 = 443（与 xray 集成，访问 https://域名，需要 xray 配置 fallback）"
     echo "  3 = 443（纯粹的 HTTPS 域名访问，不使用 xray）"
     read -e -p "请选择 [1/2/3] (默认 1): " port_choice
 
-    local internal_https_port="2083"
+    local internal_https_port="8183"
 
     case "${port_choice:-1}" in
         2)
@@ -546,9 +562,21 @@ configure_nginx() {
             info "使用端口: 443（纯粹的 HTTPS 域名访问）"
             ;;
         *)
-            internal_https_port="2083"
-            PUBLIC_PORT="2083"
-            info "使用端口: 2083"
+            local external_port
+            read -e -p "请输入外部 Nginx 端口 [默认 8183，直接回车使用 8183]: " external_port
+            external_port="${external_port:-8183}"
+            while ! valid_tcp_port "$external_port"; do
+                warn "端口必须是 1-65535 的整数"
+                read -e -p "请重新输入外部 Nginx 端口 [默认 8183]: " external_port
+                external_port="${external_port:-8183}"
+            done
+            internal_https_port="$external_port"
+            PUBLIC_PORT="$external_port"
+            if [ "$PUBLIC_PORT" = "443" ]; then
+                info "使用端口: 443（域名可直接访问，不需要写 :443）"
+            else
+                info "使用外部 Nginx 端口: ${PUBLIC_PORT}"
+            fi
             ;;
     esac
     save_state
@@ -562,7 +590,7 @@ configure_nginx() {
             ok "检测到证书，ISM 已配置为与 xray fallback 配合（本地 127.0.0.1:8080）"
             echo -e "${YELLOW}用户访问方式：https://${DOMAIN}（通过 xray 端口 443 转发）${NC}"
         else
-            ok "检测到证书，已配置 https://${DOMAIN}:${PUBLIC_PORT}"
+            ok "检测到证书，已配置 $(https_access_url "$DOMAIN" "$PUBLIC_PORT")"
         fi
     else
         write_nginx_http
@@ -2419,7 +2447,7 @@ update_domain() {
         echo -e "${YELLOW}请选择部署模式：${NC}"
         echo "1) xray集成     - ISM监听内部 8080，由xray 443分流（当前架构）"
         echo "2) 标准模式      - ISM 直接监听 443 端口（不使用xray）"
-        echo "3) nginx转发模式 - ISM监听内部端口，nginx 2083 转发"
+        echo "3) nginx独立端口 - 默认 8183，可自定义；输入 443 时域名直接访问"
         echo ""
 
         local mode_choice="1"
@@ -2427,10 +2455,21 @@ update_domain() {
         mode_choice="${mode_choice:-1}"
 
         case "$mode_choice" in
-            1) https_mode="1" ;;
-            2) https_mode="2" ;;
-            3) https_mode="3" ;;
-            *) https_mode="1" ;;
+            1) https_mode="1"; PUBLIC_PORT="8080" ;;
+            2) https_mode="2"; PUBLIC_PORT="443" ;;
+            3)
+                https_mode="3"
+                local external_port
+                read -e -p "请输入外部 Nginx 端口 [默认 8183，直接回车使用 8183]: " external_port
+                external_port="${external_port:-8183}"
+                while ! valid_tcp_port "$external_port"; do
+                    echo -e "${RED}端口必须是 1-65535 的整数${NC}"
+                    read -e -p "请重新输入外部 Nginx 端口 [默认 8183]: " external_port
+                    external_port="${external_port:-8183}"
+                done
+                PUBLIC_PORT="$external_port"
+                ;;
+            *) https_mode="1"; PUBLIC_PORT="8080" ;;
         esac
 
         if [ "$https_mode" = "2" ]; then
@@ -2446,7 +2485,7 @@ update_domain() {
         elif [ "$https_mode" = "1" ]; then
             echo -e "${YELLOW}✓ 已选择xray集成模式（ISM监听 8080，xray处理443）${NC}"
         else
-            echo -e "${YELLOW}✓ 已选择nginx转发模式（ISM监听内部端口，nginx 2083转发）${NC}"
+            echo -e "${YELLOW}✓ 已选择nginx独立端口模式（默认 8183，可自定义）${NC}"
         fi
     fi
 
@@ -2500,7 +2539,7 @@ server {
 EOF
         echo -e "${GREEN}✅ 已配置xray集成模式${NC}"
         echo -e "${GREEN}ISM监听: https://127.0.0.1:8080（xray伪装站）${NC}"
-        echo -e "${YELLOW}用户访问: https://${DOMAIN}:443（由xray分流）${NC}"
+        echo -e "${YELLOW}用户访问: https://${DOMAIN}（由xray分流）${NC}"
     elif [ "$https_mode" = "2" ] && [ -n "$DOMAIN" ] && [ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]; then
         # 模式2：标准模式，ISM直接监听443
         cat > "$NGINX_SITE_FILE" <<EOF
@@ -2524,12 +2563,12 @@ server {
     }
 }
 EOF
-        echo -e "${GREEN}✅ 已配置标准模式: https://${DOMAIN}:443${NC}"
+        echo -e "${GREEN}✅ 已配置标准模式: https://${DOMAIN}${NC}"
     elif [ "$https_mode" = "3" ] && [ -n "$DOMAIN" ] && [ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]; then
-        # 模式3：nginx转发模式，ISM监听内部端口，nginx监听2083转发（外网可访问）
+        # 模式3：nginx独立外部端口，默认8183，可自定义
         cat > "$NGINX_SITE_FILE" <<EOF
 server {
-    listen 2083 ssl;
+    listen ${PUBLIC_PORT} ssl;
     server_name ${DOMAIN};
 
     ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
@@ -2548,9 +2587,9 @@ server {
     }
 }
 EOF
-        echo -e "${GREEN}✅ 已配置nginx转发模式${NC}"
+        echo -e "${GREEN}✅ 已配置 Nginx 独立端口模式${NC}"
         echo -e "${GREEN}ISM监听: http://127.0.0.1:${INTERNAL_PORT}（内部应用）${NC}"
-        echo -e "${YELLOW}nginx转发: https://${DOMAIN}:2083${NC}"
+        echo -e "${YELLOW}用户访问: $(https_access_url "$DOMAIN" "$PUBLIC_PORT")${NC}"
     else
         # HTTP 模式（未配置域名或未找到证书）
         cat > "$NGINX_SITE_FILE" <<EOF
@@ -2606,9 +2645,9 @@ EOF
     if [ "$https_mode" = "1" ]; then
         echo "ISM 模式: xray集成（监听 127.0.0.1:8080）"
     elif [ "$https_mode" = "2" ]; then
-        echo "ISM 访问地址: https://${DOMAIN}:443/"
+        echo "ISM 访问地址: https://${DOMAIN}/"
     elif [ "$https_mode" = "3" ]; then
-        echo "ISM 访问地址: https://${DOMAIN}:2083/"
+        echo "ISM 访问地址: $(https_access_url "$DOMAIN" "$PUBLIC_PORT")/"
     fi
     echo "旧状态备份: ${STATE_FILE}${bak_suffix}"
     echo "============================================="
