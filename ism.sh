@@ -9,6 +9,7 @@ BACKUP_FILE="${BACKUP_DIR}/ism_latest.sql"
 BACKUP_SCRIPT="${APP_ROOT}/ism_backup.py"
 CRON_BACKUP_FILE="/etc/cron.d/ism_backup"
 BACKUP_LOG_FILE="/var/log/ism_backup.log"
+BACKUP_PYTHON="${VENV_DIR}/bin/python"
 
 SERVICE_NAME="ism"
 SYSTEMD_SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
@@ -1567,10 +1568,34 @@ uninstall_clouddrive_app() {
     echo "说明：本脚本没有删除 ${CD_MOUNT_DIR}"
 }
 
+backup_python_ready() {
+    if [ ! -x "$BACKUP_PYTHON" ]; then
+        err "备份 Python 虚拟环境不存在：$BACKUP_PYTHON"
+        warn "请先确认 /root/ism/venv 已正常安装。"
+        return 1
+    fi
+    if ! "$BACKUP_PYTHON" -c 'import yaml' >/dev/null 2>&1; then
+        err "备份 Python 缺少 PyYAML：$BACKUP_PYTHON"
+        warn "可执行：${VENV_DIR}/bin/pip install -r ${APP_ROOT}/requirements.txt"
+        return 1
+    fi
+    return 0
+}
+
 write_backup_script() {
     if [ -f "$BACKUP_SCRIPT" ]; then
         chmod +x "$BACKUP_SCRIPT"
         ok "备份脚本已就绪：$BACKUP_SCRIPT"
+
+        # 兼容旧版本：如果已有 cron 仍使用系统 python3，自动迁移到 ISM venv。
+        if [ -f "$CRON_BACKUP_FILE" ] && grep -Fq "python3 ${BACKUP_SCRIPT}" "$CRON_BACKUP_FILE"; then
+            if backup_python_ready; then
+                sed -i "s#python3 ${BACKUP_SCRIPT}#${BACKUP_PYTHON} ${BACKUP_SCRIPT}#g" "$CRON_BACKUP_FILE"
+                chmod 644 "$CRON_BACKUP_FILE"
+                systemctl restart cron >/dev/null 2>&1 || true
+                ok "旧备份 cron 已自动切换到虚拟环境 Python：$BACKUP_PYTHON"
+            fi
+        fi
     else
         warn "未找到备份脚本：$BACKUP_SCRIPT，请重新安装系统"
     fi
@@ -1581,17 +1606,21 @@ install_backup_cron() {
         err "未找到备份脚本：$BACKUP_SCRIPT，请重新执行本安装包的系统安装"
         return 1
     fi
+    if ! backup_python_ready; then
+        return 1
+    fi
 
     info "生成 cron 自动备份任务"
     cat > "$CRON_BACKUP_FILE" <<EOF_CRON
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 MAILTO=""
-0 20 * * * root flock -n /var/run/ism_backup.lock python3 ${BACKUP_SCRIPT}
+0 20 * * * root flock -n /var/run/ism_backup.lock ${BACKUP_PYTHON} ${BACKUP_SCRIPT}
 EOF_CRON
     chmod 644 "$CRON_BACKUP_FILE"
     systemctl restart cron
     ok "cron 自动备份已开启：每天 20:00 执行 ${BACKUP_SCRIPT}"
+    ok "备份解释器：${BACKUP_PYTHON}"
 }
 
 show_backup_cron_status() {
@@ -1610,10 +1639,28 @@ show_backup_cron_status() {
         echo -e "${err} 未发现备份脚本：$BACKUP_SCRIPT"
     fi
 
-    if journalctl -u cron --since "today" --no-pager 2>/dev/null | grep -F "$BACKUP_SCRIPT" >/dev/null 2>&1; then
-        local run_count
+    if backup_python_ready; then
+        echo -e "${ok} 备份 Python：$BACKUP_PYTHON（PyYAML 正常）"
+    else
+        echo -e "${err} 备份 Python 环境异常"
+    fi
+
+    local today run_count
+    today=$(date '+%Y-%m-%d')
+    run_count=0
+    if [ -f "$BACKUP_LOG_FILE" ] && [ -s "$BACKUP_LOG_FILE" ]; then
+        run_count=$(grep -c "${today} .*Starting database backup" "$BACKUP_LOG_FILE" 2>/dev/null || true)
+    fi
+    if [ "${run_count:-0}" -gt 0 ]; then
+        echo -e "${ok} 今日已启动备份 ${run_count} 次"
+        if grep -q "${today} .*Backup process completed" "$BACKUP_LOG_FILE" 2>/dev/null; then
+            echo -e "${ok} 今日已有成功完成的备份"
+        elif grep -q "${today} .*\[ERR\]" "$BACKUP_LOG_FILE" 2>/dev/null; then
+            echo -e "${err} 今日备份日志中存在失败记录，请查看下方日志"
+        fi
+    elif journalctl -u cron --since "today" --no-pager 2>/dev/null | grep -F "$BACKUP_SCRIPT" >/dev/null 2>&1; then
         run_count=$(journalctl -u cron --since "today" --no-pager 2>/dev/null | grep -cF "$BACKUP_SCRIPT" || true)
-        echo -e "${ok} 今日已执行 ${run_count} 次"
+        echo -e "${ok} cron 今日已触发 ${run_count} 次（未发现脚本成功启动日志）"
     else
         echo -e "${err} 今日尚未执行"
     fi
@@ -1647,20 +1694,29 @@ manual_backup_database() {
         err "备份脚本不存在：$BACKUP_SCRIPT"
         return 1
     fi
-
-    python3 "$BACKUP_SCRIPT"
-
-    if [ -f "$BACKUP_FILE" ]; then
-        ok "数据库备份完成：$BACKUP_FILE"
-        ls -lh "$BACKUP_FILE"
-        if [ -f "${BACKUP_DIR}/ism_code_latest.tar.gz" ]; then
-            ok "程序代码备份完成：${BACKUP_DIR}/ism_code_latest.tar.gz"
-            ls -lh "${BACKUP_DIR}/ism_code_latest.tar.gz"
-        fi
-    else
-        err "备份失败"
+    if ! backup_python_ready; then
         return 1
     fi
+
+    if ! "$BACKUP_PYTHON" "$BACKUP_SCRIPT"; then
+        err "本次备份失败，请查看：$BACKUP_LOG_FILE"
+        return 1
+    fi
+
+    if [ ! -s "$BACKUP_FILE" ]; then
+        err "本次备份未生成有效数据库文件：$BACKUP_FILE"
+        return 1
+    fi
+    if [ ! -s "${BACKUP_DIR}/ism_code_latest.tar.gz" ]; then
+        err "本次备份未生成有效程序代码文件：${BACKUP_DIR}/ism_code_latest.tar.gz"
+        return 1
+    fi
+
+    ok "数据库备份完成：$BACKUP_FILE"
+    ls -lh "$BACKUP_FILE"
+    ok "程序代码备份完成：${BACKUP_DIR}/ism_code_latest.tar.gz"
+    ls -lh "${BACKUP_DIR}/ism_code_latest.tar.gz"
+    ok "本次数据库 + 程序代码备份及90天轮转同步全部完成"
 }
 
 setup_backup() {
@@ -1820,6 +1876,9 @@ restart_service() {
         return 1
     fi
     ok "数据库表结构检查完成"
+
+    # Ensure backup runner/cron use the project virtualenv after manual upgrades.
+    write_backup_script
 
     systemctl daemon-reload
     systemctl enable "$SERVICE_NAME"

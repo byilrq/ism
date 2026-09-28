@@ -2,8 +2,17 @@
 import subprocess
 import sys
 import tarfile
-import yaml
 from datetime import datetime, timedelta
+
+try:
+    import yaml
+except ModuleNotFoundError:
+    print(
+        "[ERR] PyYAML is unavailable in the current Python environment. "
+        "Run this script with /root/ism/venv/bin/python.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
 from pathlib import Path
 
 CONFIG_FILE = "/root/ism/config.yaml"
