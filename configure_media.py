@@ -19,7 +19,7 @@ import yaml
 
 BEGIN = '# BEGIN ISM IMAGE PERFORMANCE v1'
 END = '# END ISM IMAGE PERFORMANCE v1'
-SUBDIRS = ('assets', 'accessories', 'asset_locations', 'cable', 'cable_shelf')
+SUBDIRS = ('assets', 'accessories', 'asset_locations')
 
 
 def quoted_path(path):

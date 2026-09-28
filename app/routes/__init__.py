@@ -20,10 +20,8 @@ from app.image_uploads import update_images, finish_upload
 from app.device_audit import device_snapshot, describe_device_changes, describe_device_creation, log_device_change
 
 try:
-    from .cable import register_cable_routes, Cable
     from .debug import register_debug_routes
 except ImportError:
-    from cable import register_cable_routes, Cable
     from debug import register_debug_routes
 
 from .upload import register_upload_routes, AssetLocationImage, delete_image_file, save_uploaded_image, trim_asset_images, trim_accessory_images, trim_asset_location_images, get_asset_location_images, delete_accessory_with_files, delete_asset_with_files, build_image_filename_prefix, sanitize_image_prefix, restore_asset, restore_accessory, permanent_delete_asset, permanent_delete_accessory
@@ -835,9 +833,6 @@ def get_recognized_no_label(value):
     return "集团编号" if is_group_no_value(value) else "内部编号"
 
 
-def is_cable_code_value(value):
-    return bool(re.fullmatch(r"DMDL\d{6}", normalize_text(value).upper()))
-
 
 def is_group_asset_code_value(value):
     return bool(re.fullmatch(r"\d{18}", normalize_text(value)))
@@ -938,9 +933,6 @@ def is_group_no_value(value):
 def get_recognized_no_label(value):
     return "集团编号" if is_group_no_value(value) else "内部编号"
 
-
-def is_cable_code_value(value):
-    return bool(re.fullmatch(r"DMDL\d{6}", normalize_text(value).upper()))
 
 
 def is_group_asset_code_value(value):
@@ -1072,7 +1064,7 @@ def process_scan_code_action(scan_mode, recognized_no, assign_location="", confi
     if not recognized_no:
         return {"ok": False, "message": "缺少识别结果"}, 400
 
-    normalized_code = recognized_no.upper() if is_cable_code_value(recognized_no) else recognized_no
+    normalized_code = recognized_no
 
     if assign_location:
         try:
@@ -1202,12 +1194,6 @@ def process_scan_code_action(scan_mode, recognized_no, assign_location="", confi
             db.session.rollback()
             return {"ok": False, "message": f"盘点失败：{str(e)}", "code": normalized_code}, 500
 
-    if is_cable_code_value(normalized_code):
-        cable = Cable.query.filter_by(cable_no=normalized_code).first()
-        if cable:
-            return {"ok": True, "action": "redirect", "redirect_url": url_for("cable_detail", cable_id=cable.id), "message": "已找到电缆，正在打开详情", "code": normalized_code}, 200
-        return {"ok": True, "action": "redirect", "redirect_url": url_for("cable_new", cable_no=normalized_code), "message": "未找到电缆，正在跳转新增", "code": normalized_code}, 200
-
     if is_group_accessory_code_value(normalized_code):
         accessory = Accessory.query.filter_by(sub_group_no=normalized_code).first()
         if accessory:
@@ -1241,7 +1227,6 @@ def process_scan_code_action(scan_mode, recognized_no, assign_location="", confi
 
 
 def register_routes(app):
-    register_cable_routes(app)
     register_debug_routes(app)
     register_upload_routes(app)
 
@@ -1297,13 +1282,7 @@ def register_routes(app):
         if not raw_code:
             return redirect(url_for("search_assets"))
 
-        normalized_code = raw_code.upper() if is_cable_code_value(raw_code) else raw_code
-
-        if is_cable_code_value(normalized_code):
-            cable = Cable.query.filter_by(cable_no=normalized_code).first()
-            if cable:
-                return redirect(url_for("cable_detail", cable_id=cable.id))
-            return redirect(url_for("cable_new", cable_no=normalized_code))
+        normalized_code = raw_code
 
         if is_group_accessory_code_value(normalized_code):
             accessory = Accessory.query.filter_by(sub_group_no=normalized_code).first()
@@ -1551,13 +1530,7 @@ def register_routes(app):
             session["visitor_role"] = "viewer"
             return redirect(url_for("search_assets"))
 
-        normalized_code = raw_code.upper() if is_cable_code_value(raw_code) else raw_code
-
-        if is_cable_code_value(normalized_code):
-            cable = Cable.query.filter_by(cable_no=normalized_code).first()
-            if cable:
-                return redirect(url_for("cable_detail", cable_id=cable.id))
-            return redirect(url_for("cable_new", cable_no=normalized_code))
+        normalized_code = raw_code
 
         if is_group_accessory_code_value(normalized_code):
             accessory = Accessory.query.filter_by(sub_group_no=normalized_code).first()

@@ -38,7 +38,6 @@ pre{white-space:pre-wrap;word-break:break-all;background:#0f172a;color:#e2e8f0;p
     <div class="card">
         <div class="switch-row">
             <a href="/"><button type="button" class="btn-gray">资产查询</button></a>
-            <a href="/cable"><button type="button" class="btn-gray">电缆查询</button></a>
             <a href="/debug"><button type="button">Debug</button></a>
         </div>
     </div>

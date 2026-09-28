@@ -3,7 +3,7 @@
 No decoder, resize, recompression or metadata stripping is used. Scope locks
 live in the database so two Gunicorn processes share the same exclusion lock.
 """
-from datetime import datetime
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from urllib.parse import quote
@@ -24,13 +24,16 @@ from sqlalchemy.orm import Session
 
 from app import db
 
-IMAGE_SUBDIRS = frozenset(("assets", "accessories", "asset_locations", "cable", "cable_shelf"))
+IMAGE_SUBDIRS = frozenset(("assets", "accessories", "asset_locations"))
 IMAGE_EXTENSIONS = frozenset(("jpg", "jpeg", "png", "webp"))
 UPLOAD_ENDPOINTS = frozenset(("device_new", "asset_detail", "accessory_detail",
-                              "asset_location_detail", "cable_new", "cable_detail",
-                              "cable_location_detail"))
+                              "asset_location_detail"))
 CHUNK_SIZE = 1024 * 1024
 IMAGE_CACHE_SECONDS = 30 * 24 * 60 * 60
+
+
+def _utc_naive_now():
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class ImageUploadScope(db.Model):
@@ -46,13 +49,7 @@ class ImageUploadSubmission(db.Model):
     submission_key = db.Column(db.String(64), primary_key=True)
     payload_hash = db.Column(db.String(64), nullable=False)
     redirect_url = db.Column(db.String(1000), nullable=True)
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
-
-
-class AppMigration(db.Model):
-    __tablename__ = "ism_app_migrations"
-    name = db.Column(db.String(128), primary_key=True)
-    applied_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, nullable=False, default=_utc_naive_now, index=True)
 
 
 def _lock_row(model, key_name, key, **initial):
@@ -204,7 +201,7 @@ def _atomic_save(file_storage, subdir, prefix):
     # Content deduplication is SHA-256 based and does not depend on filenames.
     prefix = re.sub(r"[^A-Za-z0-9_-]+", "_", str(prefix)).strip("._-")
     if not prefix:
-        prefix = "cable" if subdir in ("cable", "cable_shelf") else "asset"
+        prefix = "asset"
     random_part = "".join(random.choices(string.ascii_letters + string.digits, k=6))
     filename = f"{prefix}.{datetime.now():%Y.%m.%d}.{random_part}.{extension}"
     relative = f"{subdir}/{filename}"
@@ -398,7 +395,7 @@ def register_image_uploads(app):
         identity = str(session.get("_user_id") or ("visitor:" + session.get("visitor_role", "")))
         key = sha256(json.dumps([identity, request.endpoint, request.path, token]).encode()).hexdigest()
         receipt = _lock_row(ImageUploadSubmission, "submission_key", key,
-                            payload_hash=digest.hexdigest(), created_at=datetime.utcnow())
+                            payload_hash=digest.hexdigest(), created_at=_utc_naive_now())
         if receipt.payload_hash != digest.hexdigest():
             db.session.rollback()
             message = "\u672c\u6b21\u63d0\u4ea4\u5185\u5bb9\u5df2\u53d8\u5316\uff0c\u8bf7\u91cd\u65b0\u70b9\u51fb\u786e\u8ba4"

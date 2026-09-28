@@ -1,6 +1,6 @@
 """upload.py — file upload / import / image handling for ISM."""
 
-from datetime import datetime, date
+from datetime import UTC, datetime, date
 from io import BytesIO
 import os
 import random
@@ -22,6 +22,10 @@ ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 IMPORT_EXPORT_HEADERS = ["类型", "集团编号", "内部编号", "名称", "型号", "责任人", "位置", "时间", "状态", "备注"]
 IMPORT_LOG_SUBDIR = "import_logs"
 RECYCLE_SUBDIR = "recycle"
+
+
+def _utc_naive_now():
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +123,7 @@ class AssetLocationImage(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     location_name = db.Column(db.String(255), nullable=False, index=True)
     image_path = db.Column(db.String(500), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_at = db.Column(db.DateTime, default=_utc_naive_now, nullable=False)
 
 
 # ---------------------------------------------------------------------------

@@ -20,8 +20,7 @@ def initialize():
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         app = create_app()
         with app.app_context():
-            from app.image_uploads import AppMigration, ImageUploadSubmission
-            from app.routes.cable import backfill_cable_shelves
+            from app.image_uploads import ImageUploadSubmission
             db.create_all()
 
             # db.create_all() does not add columns to an existing table. Keep
@@ -83,11 +82,6 @@ def initialize():
                     ))
             db.session.commit()
 
-            name = 'cable_shelf_backfill_v1'
-            if db.session.get(AppMigration, name) is None:
-                backfill_cable_shelves()
-                db.session.add(AppMigration(name=name))
-                db.session.commit()
             # Receipts guard stale form retries for 90 days. Per-owner file
             # content deduplication remains active independently of this TTL.
             ImageUploadSubmission.query.filter(
