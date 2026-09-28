@@ -251,6 +251,9 @@ def _after_commit(session_obj):
                 if target.exists():
                     target = target.with_name(f"{target.stem}.{uuid.uuid4().hex[:8]}{target.suffix}")
                 shutil.move(str(source), str(target))
+                # Recycle retention starts at deletion time, not the photo's
+                # original filesystem mtime.
+                os.utime(target, None)
             else:
                 source.unlink(missing_ok=True)
         except OSError:

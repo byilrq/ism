@@ -1596,6 +1596,14 @@ write_backup_script() {
                 ok "旧备份 cron 已自动切换到虚拟环境 Python：$BACKUP_PYTHON"
             fi
         fi
+
+        # v14: daily snapshots and recycle retention processing now run at 22:00.
+        if [ -f "$CRON_BACKUP_FILE" ] && grep -Eq '^0 20 \* \* \* root .*ism_backup\.py' "$CRON_BACKUP_FILE"; then
+            sed -i -E 's#^0 20 (\* \* \* root .*ism_backup\.py)$#0 22 \1#' "$CRON_BACKUP_FILE"
+            chmod 644 "$CRON_BACKUP_FILE"
+            systemctl restart cron >/dev/null 2>&1 || true
+            ok "旧备份 cron 已自动调整为每天 22:00"
+        fi
     else
         warn "未找到备份脚本：$BACKUP_SCRIPT，请重新安装系统"
     fi
@@ -1615,11 +1623,11 @@ install_backup_cron() {
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 MAILTO=""
-0 20 * * * root flock -n /var/run/ism_backup.lock ${BACKUP_PYTHON} ${BACKUP_SCRIPT}
+0 22 * * * root flock -n /var/run/ism_backup.lock ${BACKUP_PYTHON} ${BACKUP_SCRIPT}
 EOF_CRON
     chmod 644 "$CRON_BACKUP_FILE"
     systemctl restart cron
-    ok "cron 自动备份已开启：每天 20:00 执行 ${BACKUP_SCRIPT}"
+    ok "cron 自动备份已开启：每天 22:00 执行 ${BACKUP_SCRIPT}"
     ok "备份解释器：${BACKUP_PYTHON}"
 }
 
@@ -1716,7 +1724,7 @@ manual_backup_database() {
     ls -lh "$BACKUP_FILE"
     ok "程序代码备份完成：${BACKUP_DIR}/ism_code_latest.tar.gz"
     ls -lh "${BACKUP_DIR}/ism_code_latest.tar.gz"
-    ok "本次数据库 + 程序代码备份及90天轮转同步全部完成"
+    ok "本次数据库 + 程序代码备份、90天轮转及回收站清理全部完成"
 }
 
 setup_backup() {

@@ -2153,27 +2153,6 @@ def register_routes(app):
         if guard:
             return guard
 
-        from datetime import datetime, timedelta
-        cutoff_time = datetime.now() - timedelta(days=30)
-
-        deleted_assets = Asset.query.filter(and_(Asset.deleted_at.isnot(None), Asset.status == "已删除")).all()
-        for asset in deleted_assets:
-            if asset.deleted_at < cutoff_time:
-                try:
-                    permanent_delete_asset(asset)
-                except Exception as e:
-                    print(f"[ERR] 删除资产 {asset.id} 失败: {str(e)}")
-
-        deleted_accessories = Accessory.query.filter(and_(Accessory.deleted_at.isnot(None), Accessory.status == "已删除")).all()
-        for accessory in deleted_accessories:
-            if accessory.deleted_at < cutoff_time:
-                try:
-                    permanent_delete_accessory(accessory)
-                except Exception as e:
-                    print(f"[ERR] 删除配件 {accessory.id} 失败: {str(e)}")
-
-        db.session.commit()
-
         deleted_assets = Asset.query.filter(and_(Asset.deleted_at.isnot(None), Asset.status == "已删除")).order_by(Asset.deleted_at.desc()).all()
         deleted_accessories = Accessory.query.filter(and_(Accessory.deleted_at.isnot(None), Accessory.status == "已删除")).order_by(Accessory.deleted_at.desc()).all()
         return render_template(
@@ -2192,10 +2171,9 @@ def register_routes(app):
             return guard
         asset = Asset.query.get_or_404(asset_id)
         try:
-            restore_asset(asset)
+            restored_accessories = restore_asset(asset)
             log_device_change(asset, "恢复设备")
-            for accessory in Accessory.query.filter_by(parent_asset_id=asset.id, status="已删除").all():
-                restore_accessory(accessory)
+            for accessory in restored_accessories:
                 log_device_change(accessory, "随主设备恢复")
             db.session.commit()
             return redirect(url_for("recycle_bin"))

@@ -48,6 +48,11 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .image-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;padding:10px 12px;background:#fafbfd;border:1px solid #dde4ec;border-radius:12px;}
 .upload-actions{display:flex;gap:8px;flex-wrap:wrap;}
 .upload-actions button{width:auto;min-width:120px;}
+.upload-inline{display:flex;flex-direction:column;align-items:flex-start;gap:4px;}
+.upload-inline-meta{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:0;width:100%;padding-top:0;}
+.upload-inline .file-list{margin-top:0;width:100%;font-size:13px;line-height:1.45;color:#748091;text-align:left;}
+.upload-inline-status{font-size:13px;line-height:1.45;color:#748091;word-break:break-word;min-height:0;}
+.image-empty{font-size:13px;line-height:1.45;color:#748091;}
 .file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
 .upload-preview-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}.upload-preview-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #e1e7ef;border-radius:10px;background:#fbfdff;color:#4d5b6b;}.upload-preview-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.upload-remove-btn{width:28px;min-width:28px;height:28px;padding:0;border-radius:999px;background:#dc2626;color:#fff;border:none;box-shadow:none;font-weight:900;line-height:1;display:inline-flex;align-items:center;justify-content:center;}
 .upload-dialog{position:fixed;inset:0;background:rgba(15,23,42,.52);display:none;align-items:center;justify-content:center;z-index:10000;padding:18px;} .upload-dialog.show{display:flex;} .upload-dialog-card{width:100%;max-width:600px;background:#fff;border-radius:18px;padding:22px 20px;box-shadow:0 18px 50px rgba(15,23,42,.28);}
@@ -388,7 +393,7 @@ function requestInventory(formId, message){
 }
 </script>
 <meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
-<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v4-routefix') }}" defer></script>
+<script src="{{ url_for('static', filename='ism-upload.js', v='20260928-ui-v14') }}" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -415,8 +420,7 @@ function requestInventory(formId, message){
                 <div class="row"><label>状态</label><select class="edit-field readonly" disabled name="status"><option value="">请选择</option>{% for s in statuses %}<option value="{{ s.dict_value }}" {% if (asset.status or '') == s.dict_value %}selected{% endif %}>{{ s.dict_value }}</option>{% endfor %}</select></div>
                 <div class="row">
                     <label>上传图片（最多5张）</label>
-                    <div class="upload-actions"><button type="button" class="edit-field readonly" disabled onclick='openUploadChooser("asset-upload-choice-dialog", this)'>上传图片</button></div>
-                    <div id="asset-image-files-text" class="file-list" data-inputs="asset-camera-files,asset-file-files">未选择图片</div>
+                    <div class="upload-inline"><div class="upload-actions"><button type="button" class="edit-field readonly" disabled onclick='openUploadChooser("asset-upload-choice-dialog", this)'>上传图片</button></div><div class="upload-inline-meta"><div id="asset-image-files-text" class="file-list" data-inputs="asset-camera-files,asset-file-files">未加载</div><div class="upload-inline-status" data-ism-upload-status role="status" aria-live="polite"></div></div></div>
                     <div style="display:none;">
                         <input type="file" id="asset-camera-files" name="image_files" accept="image/*" capture="environment" multiple onchange="updateSelectedFiles('asset-camera-files', 'asset-image-files-text', 'asset-upload-choice-dialog')">
                         <input type="file" id="asset-file-files" name="image_files" accept="image/*" multiple onchange="updateSelectedFiles('asset-file-files', 'asset-image-files-text', 'asset-upload-choice-dialog')">
@@ -430,7 +434,7 @@ function requestInventory(formId, message){
                     <div class="image-row"><a href="/uploads/{{ img.image_path }}" target="_blank">图片{{ loop.index }}</a><label style="display:flex;align-items:center;gap:6px;font-weight:normal;"><input class="edit-field readonly" disabled type="checkbox" name="delete_asset_image_ids" value="{{ img.id }}"> 删除</label></div>
                     {% endfor %}
                     <div style="color:#666;font-size:13px;">先点击"修改"，勾选要删除的图片，修改完再点"修改"按钮确认。</div>
-                {% else %}<div>暂无图片</div>{% endif %}
+                {% else %}<div class="image-empty">暂无</div>{% endif %}
             </div>
             <div class="row"><label>备注</label><textarea class="edit-field readonly" disabled name="remark">{{ asset.remark or '' }}</textarea></div>
             <div class="detail-actions">

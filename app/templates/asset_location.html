@@ -54,6 +54,11 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .image-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;padding:10px 12px;background:#fafbfd;border:1px solid #dde4ec;border-radius:12px;}
 .upload-actions{display:flex;gap:8px;flex-wrap:wrap;}
 .upload-actions button{width:auto;min-width:120px;}
+.upload-inline{display:flex;flex-direction:column;align-items:flex-start;gap:4px;}
+.upload-inline-meta{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:0;width:100%;padding-top:0;}
+.upload-inline .file-list{margin-top:0;width:100%;font-size:13px;line-height:1.45;color:#748091;text-align:left;}
+.upload-inline-status{font-size:13px;line-height:1.45;color:#748091;word-break:break-word;min-height:0;}
+.image-empty{font-size:13px;line-height:1.45;color:#748091;}
 .file-list{margin-top:8px;color:#66788a;font-size:14px;word-break:break-all;line-height:1.6;}
 .upload-preview-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}.upload-preview-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #e1e7ef;border-radius:10px;background:#fbfdff;color:#4d5b6b;}.upload-preview-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.upload-remove-btn{width:28px;min-width:28px;height:28px;padding:0;border-radius:999px;background:#dc2626;color:#fff;border:none;box-shadow:none;font-weight:900;line-height:1;display:inline-flex;align-items:center;justify-content:center;}
 .upload-dialog{position:fixed;inset:0;background:rgba(15,23,42,.52);display:none;align-items:center;justify-content:center;z-index:10000;padding:18px;} .upload-dialog.show{display:flex;} .upload-dialog-card{width:100%;max-width:320px;background:#fff;border-radius:18px;padding:22px 20px;box-shadow:0 18px 50px rgba(15,23,42,.28);}
@@ -139,11 +144,11 @@ function enableEdit(formId){
 function confirmLocationSave(){ return confirm('确认保存货架位置和图片吗？'); }
 </script>
 <meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
-<script src="{{ url_for('static', filename='ism-upload.js', v='20260927-original-v4-routefix') }}" defer></script>
+<script src="{{ url_for('static', filename='ism-upload.js', v='20260928-ui-v14') }}" defer></script>
 </head>
 <body>
 <div class="wrap">
-    <div class="card"><div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;"><span><strong>当前用户：</strong>{{ user_display }}</span><span style="font-size:13px;color:#6f7b88;word-break:break-all;"><strong>当前上传目录：</strong>{{ config.get('UPLOAD_FOLDER', '') }}</span></div></div>
+    <div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;"><span style="display:inline-flex;align-items:center;gap:8px;font-size:18px;font-weight:800;color:#263646;"><img src="{{ url_for('static', filename='login.webp', v='20260927-login-v2') }}" alt="资产管理系统" width="34" height="34" style="width:34px;height:34px;border-radius:50%;object-fit:cover;">资产管理系统</span><span style="font-size:13px;color:#6f7b88;word-break:break-all;"><strong>存储路径：</strong>{{ config.get('UPLOAD_FOLDER', '') }}</span></div></div>
 
     <div class="card">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
@@ -159,10 +164,9 @@ function confirmLocationSave(){ return confirm('确认保存货架位置和图�
                 <div class="row"><label>货架位置</label><input class="{{ 'edit-field readonly' if readonly else '' }}" {% if readonly %}disabled{% endif %} type="text" name="new_location" value="{{ form_data.location }}"></div>
                 <div class="row">
                     <label>上传货架图片（最多5张）</label>
-                    <div class="upload-actions">
+                    <div class="upload-inline"><div class="upload-actions">
                         <button type="button" class="{{ 'edit-field readonly' if readonly else '' }} {% if not can_manage %}btn-disabled{% endif %}" {% if readonly or not can_manage %}disabled{% endif %} onclick='openUploadChooser("asset-location-upload-choice-dialog", this)'>上传图片</button>
-                    </div>
-                    <div id="asset-location-image-files-text" class="file-list" data-inputs="asset-location-camera-files,asset-location-file-files">未选择图片</div>
+                    </div><div class="upload-inline-meta"><div id="asset-location-image-files-text" class="file-list" data-inputs="asset-location-camera-files,asset-location-file-files">未加载</div><div class="upload-inline-status" data-ism-upload-status role="status" aria-live="polite"></div></div></div>
                     <div style="display:none;">
                         <input type="file" id="asset-location-camera-files" name="image_files" accept="image/*" capture="environment" multiple onchange="updateSelectedFiles('asset-location-camera-files', 'asset-location-image-files-text', 'asset-location-upload-choice-dialog')">
                         <input type="file" id="asset-location-file-files" name="image_files" accept="image/*" multiple onchange="updateSelectedFiles('asset-location-file-files', 'asset-location-image-files-text', 'asset-location-upload-choice-dialog')">
@@ -180,7 +184,7 @@ function confirmLocationSave(){ return confirm('确认保存货架位置和图�
                     {% endfor %}
                     <div style="color:#666;font-size:13px;">先点击"修改"，勾选要删除的图片，修改完再点"修改"按钮确认。</div>
                 {% else %}
-                    <div>暂无图片</div>
+                    <div class="image-empty">暂无</div>
                 {% endif %}
             </div>
             <div class="detail-actions">

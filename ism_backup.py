@@ -171,6 +171,29 @@ def sync_to_remote(upload_folder):
         return False
 
 
+
+def cleanup_recycle_after_backup():
+    """Purge 90-day recycle data only after snapshots/rotation have succeeded."""
+    try:
+        if APP_ROOT not in sys.path:
+            sys.path.insert(0, APP_ROOT)
+        from app import create_app
+        from app.routes.upload import purge_expired_recycle_records
+
+        app = create_app()
+        with app.app_context():
+            result = purge_expired_recycle_records(BACKUP_RETENTION_DAYS)
+        log_msg(
+            "Recycle cleanup completed: "
+            f"assets={result.get('assets', 0)}, "
+            f"accessories={result.get('accessories', 0)}, "
+            f"files={result.get('files', 0)}, retention={BACKUP_RETENTION_DAYS} days"
+        )
+        return True
+    except Exception as e:
+        log_msg(f"Recycle cleanup failed: {e}", "ERR")
+        return False
+
 def _run_init_db_after_restore():
     init_script = Path(INIT_DB_SCRIPT)
     if not init_script.exists():
@@ -328,7 +351,12 @@ def main():
         log_msg("=" * 66)
         return 1
 
-    log_msg(f"Backup process completed; retention={BACKUP_RETENTION_DAYS} days")
+    if not cleanup_recycle_after_backup():
+        log_msg("Snapshots completed, but recycle cleanup failed", "ERR")
+        log_msg("=" * 66)
+        return 1
+
+    log_msg(f"Backup process completed; backup/recycle retention={BACKUP_RETENTION_DAYS} days")
     log_msg("=" * 66)
     return 0
 

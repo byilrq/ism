@@ -1,7 +1,8 @@
 """upload.py — file upload / import / image handling for ISM."""
 
-from datetime import UTC, datetime, date
+from datetime import UTC, datetime, date, timedelta
 from io import BytesIO
+import json
 import os
 import random
 import re
@@ -15,13 +16,14 @@ from openpyxl import Workbook, load_workbook
 from sqlalchemy import or_, func
 
 from app import db, FlaskConfig as Config
-from app.models import AssetImage, AccessoryImage, Asset
+from app.models import AssetImage, AccessoryImage, Asset, Accessory
 from app.device_audit import device_snapshot, describe_device_changes, describe_device_creation, log_device_change
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 IMPORT_EXPORT_HEADERS = ["类型", "集团编号", "内部编号", "名称", "型号", "责任人", "位置", "时间", "状态", "备注"]
 IMPORT_LOG_SUBDIR = "import_logs"
 RECYCLE_SUBDIR = "recycle"
+RECYCLE_RETENTION_DAYS = 90
 
 
 def _utc_naive_now():
@@ -168,40 +170,130 @@ def save_uploaded_image(file_storage, subdir, filename_prefix="asset"):
     return f"{subdir}/{filename}"
 
 
-def move_image_file_to_recycle(relative_path):
+def _safe_relative_path(relative_path):
     if not relative_path:
-        return
-    safe_relative_path = os.path.normpath(relative_path).replace("\\", "/")
-    if safe_relative_path.startswith(".."):
-        return
-    if safe_relative_path == RECYCLE_SUBDIR or safe_relative_path.startswith(f"{RECYCLE_SUBDIR}/"):
-        return
-    abs_path = os.path.join(Config.UPLOAD_FOLDER, safe_relative_path)
-    if not os.path.exists(abs_path) or not os.path.isfile(abs_path):
-        return
-    recycle_dir = os.path.join(Config.UPLOAD_FOLDER, RECYCLE_SUBDIR, os.path.dirname(safe_relative_path))
-    os.makedirs(recycle_dir, exist_ok=True)
-    recycle_filename = os.path.basename(safe_relative_path)
-    target_path = os.path.join(recycle_dir, recycle_filename)
-    if os.path.exists(target_path):
-        name, ext = os.path.splitext(recycle_filename)
-        target_path = os.path.join(recycle_dir, f"{name}.{uuid.uuid4().hex[:8]}{ext}")
-    shutil.move(abs_path, target_path)
+        return ""
+    value = os.path.normpath(str(relative_path)).replace("\\", "/").lstrip("/")
+    if value in ("", ".") or value.startswith("../") or "/../" in f"/{value}/":
+        return ""
+    return value
+
+
+def _recycle_image_path(relative_path):
+    safe_relative_path = _safe_relative_path(relative_path)
+    if not safe_relative_path:
+        return None
+    return os.path.join(Config.UPLOAD_FOLDER, RECYCLE_SUBDIR, safe_relative_path)
+
+
+def _recycle_manifest_path(device_type, device_id):
+    kind = "asset" if device_type == "asset" else "accessory"
+    return os.path.join(Config.UPLOAD_FOLDER, RECYCLE_SUBDIR, "records", f"{kind}_{int(device_id)}.json")
+
+
+def _json_value(value):
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return value
+
+
+def _write_recycle_manifest(device_type, obj, deleted_with_parent=False):
+    if device_type == "asset":
+        image_paths = [row.image_path for row in AssetImage.query.filter_by(asset_id=obj.id).all()]
+        payload = {
+            "type": "asset", "id": obj.id, "group_no": obj.group_no,
+            "internal_no": obj.internal_no, "name": obj.name, "model": obj.model,
+            "owner": obj.owner, "location": obj.location, "asset_date": _json_value(obj.asset_date),
+            "status": obj.status, "previous_status": obj.previous_status, "remark": obj.remark,
+            "deleted_at": _json_value(obj.deleted_at), "image_paths": image_paths,
+        }
+    else:
+        image_paths = [row.image_path for row in AccessoryImage.query.filter_by(accessory_id=obj.id).all()]
+        payload = {
+            "type": "accessory", "id": obj.id, "parent_asset_id": obj.parent_asset_id,
+            "group_no": obj.sub_group_no, "internal_no": obj.sub_internal_no,
+            "name": obj.name, "model": obj.model, "owner": obj.owner,
+            "location": obj.location, "asset_date": _json_value(obj.asset_date),
+            "status": obj.status, "previous_status": obj.previous_status, "remark": obj.remark,
+            "deleted_at": _json_value(obj.deleted_at), "image_paths": image_paths,
+            "deleted_with_parent": bool(deleted_with_parent),
+        }
+    path = _recycle_manifest_path(device_type, obj.id)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+    return path
+
+
+def _read_recycle_manifest(device_type, device_id):
+    path = _recycle_manifest_path(device_type, device_id)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle) or {}
+    except Exception:
+        return {}
+
+
+def _remove_recycle_manifest(device_type, device_id):
+    path = _recycle_manifest_path(device_type, device_id)
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+
+
+def move_image_file_to_recycle(relative_path):
+    """Move one live image into <upload_folder>/recycle preserving its DB-relative path."""
+    safe_relative_path = _safe_relative_path(relative_path)
+    if not safe_relative_path or safe_relative_path == RECYCLE_SUBDIR or safe_relative_path.startswith(f"{RECYCLE_SUBDIR}/"):
+        return False
+    source = os.path.join(Config.UPLOAD_FOLDER, safe_relative_path)
+    target = _recycle_image_path(safe_relative_path)
+    if not target:
+        return False
+    if not os.path.isfile(source):
+        return os.path.isfile(target)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    if os.path.exists(target):
+        os.remove(target)
+    shutil.move(source, target)
+    # Recovery retention starts when the item enters the recycle bin, not when
+    # the original photo was taken/created.
+    os.utime(target, None)
+    return True
+
+
+def restore_image_file_from_recycle(relative_path):
+    safe_relative_path = _safe_relative_path(relative_path)
+    if not safe_relative_path:
+        return False
+    source = _recycle_image_path(safe_relative_path)
+    target = os.path.join(Config.UPLOAD_FOLDER, safe_relative_path)
+    if not source or not os.path.isfile(source):
+        return os.path.isfile(target)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    os.replace(source, target)
+    return True
 
 
 def delete_image_file(relative_path):
+    # Individual image deletions also enter storage recycle; orphaned recycled
+    # files are purged by the same daily 90-day cleanup.
     move_image_file_to_recycle(relative_path)
 
 
 def permanent_delete_image_file(relative_path):
-    if not relative_path:
+    safe_relative_path = _safe_relative_path(relative_path)
+    if not safe_relative_path:
         return
-    safe_relative_path = os.path.normpath(relative_path).replace("\\", "/")
-    if safe_relative_path.startswith(".."):
-        return
-    abs_path = os.path.join(Config.UPLOAD_FOLDER, safe_relative_path)
-    if os.path.exists(abs_path) and os.path.isfile(abs_path):
-        os.remove(abs_path)
+    for abs_path in (
+        os.path.join(Config.UPLOAD_FOLDER, safe_relative_path),
+        _recycle_image_path(safe_relative_path),
+    ):
+        if abs_path and os.path.isfile(abs_path):
+            os.remove(abs_path)
 
 
 def trim_asset_images(asset):
@@ -241,48 +333,126 @@ def trim_asset_location_images(location):
         db.session.delete(old)
 
 
-def delete_accessory_with_files(accessory):
+def _soft_delete_accessory(accessory, deleted_with_parent=False):
     if not accessory:
         return
-    accessory.previous_status = accessory.status
-    accessory.status = "已删除"
-    accessory.deleted_at = datetime.now()
+    if not accessory.deleted_at or accessory.status != "已删除":
+        accessory.previous_status = accessory.status
+        accessory.status = "已删除"
+        accessory.deleted_at = datetime.now()
+    for img in AccessoryImage.query.filter_by(accessory_id=accessory.id).all():
+        move_image_file_to_recycle(img.image_path)
+    _write_recycle_manifest("accessory", accessory, deleted_with_parent=deleted_with_parent)
+
+
+def delete_accessory_with_files(accessory, deleted_with_parent=False):
+    if not accessory:
+        return
+    moved = []
+    try:
+        for img in AccessoryImage.query.filter_by(accessory_id=accessory.id).all():
+            if move_image_file_to_recycle(img.image_path):
+                moved.append(img.image_path)
+        existing_manifest = _read_recycle_manifest("accessory", accessory.id)
+        if not accessory.deleted_at or accessory.status != "已删除":
+            accessory.previous_status = accessory.status
+            accessory.status = "已删除"
+            accessory.deleted_at = datetime.now()
+        effective_parent_delete = bool(deleted_with_parent or existing_manifest.get("deleted_with_parent"))
+        _write_recycle_manifest("accessory", accessory, deleted_with_parent=effective_parent_delete)
+    except Exception:
+        for relative_path in reversed(moved):
+            restore_image_file_from_recycle(relative_path)
+        _remove_recycle_manifest("accessory", accessory.id)
+        raise
 
 
 def delete_asset_with_files(asset, get_asset_related_accessories=None):
     if not asset:
         return
-    if get_asset_related_accessories:
-        for accessory in get_asset_related_accessories(asset):
-            delete_accessory_with_files(accessory)
-    asset.previous_status = asset.status
-    asset.status = "已删除"
-    asset.deleted_at = datetime.now()
+    moved = []
+    manifest_keys = []
+    try:
+        # A deleted main device carries its currently-active accessories into
+        # recycle as one recoverable unit. Accessories deleted earlier on their
+        # own remain independent and are not re-tagged as parent deletions.
+        children = Accessory.query.filter(
+            Accessory.parent_asset_id == asset.id,
+            Accessory.deleted_at.is_(None),
+        ).all()
+        for accessory in children:
+            for img in AccessoryImage.query.filter_by(accessory_id=accessory.id).all():
+                if move_image_file_to_recycle(img.image_path):
+                    moved.append(img.image_path)
+            accessory.previous_status = accessory.status
+            accessory.status = "已删除"
+            accessory.deleted_at = datetime.now()
+            _write_recycle_manifest("accessory", accessory, deleted_with_parent=True)
+            manifest_keys.append(("accessory", accessory.id))
+
+        for img in AssetImage.query.filter_by(asset_id=asset.id).all():
+            if move_image_file_to_recycle(img.image_path):
+                moved.append(img.image_path)
+        if not asset.deleted_at or asset.status != "已删除":
+            asset.previous_status = asset.status
+            asset.status = "已删除"
+            asset.deleted_at = datetime.now()
+        _write_recycle_manifest("asset", asset)
+        manifest_keys.append(("asset", asset.id))
+    except Exception:
+        for relative_path in reversed(moved):
+            restore_image_file_from_recycle(relative_path)
+        for kind, device_id in manifest_keys:
+            _remove_recycle_manifest(kind, device_id)
+        raise
+
+
+def _restore_accessory_record(accessory):
+    if not accessory or not accessory.deleted_at:
+        return False
+    for img in AccessoryImage.query.filter_by(accessory_id=accessory.id).all():
+        restore_image_file_from_recycle(img.image_path)
+    accessory.status = accessory.previous_status if accessory.previous_status else "正常"
+    accessory.deleted_at = None
+    accessory.previous_status = None
+    _remove_recycle_manifest("accessory", accessory.id)
+    return True
 
 
 def restore_asset(asset):
     if not asset or not asset.deleted_at:
-        return False
+        return []
+    for img in AssetImage.query.filter_by(asset_id=asset.id).all():
+        restore_image_file_from_recycle(img.image_path)
     asset.status = asset.previous_status if asset.previous_status else "正常"
     asset.deleted_at = None
     asset.previous_status = None
-    return True
+    _remove_recycle_manifest("asset", asset.id)
+
+    restored_children = []
+    for accessory in Accessory.query.filter_by(parent_asset_id=asset.id, status="已删除").all():
+        manifest = _read_recycle_manifest("accessory", accessory.id)
+        # Missing manifests are legacy records. Preserve the old program's
+        # restore-with-parent behavior for those rows.
+        if not manifest or manifest.get("deleted_with_parent"):
+            if _restore_accessory_record(accessory):
+                restored_children.append(accessory)
+    return restored_children
 
 
 def restore_accessory(accessory):
-    if not accessory or not accessory.deleted_at:
-        return False
-    accessory.status = accessory.previous_status if accessory.previous_status else "正常"
-    accessory.deleted_at = None
-    accessory.previous_status = None
-    return True
+    return _restore_accessory_record(accessory)
 
 
 def permanent_delete_asset(asset):
     if not asset:
         return
+    # Delete child files explicitly before the FK cascade removes their rows.
+    for accessory in Accessory.query.filter_by(parent_asset_id=asset.id).all():
+        permanent_delete_accessory(accessory)
     for img in AssetImage.query.filter_by(asset_id=asset.id).all():
-        delete_image_file(img.image_path)
+        permanent_delete_image_file(img.image_path)
+    _remove_recycle_manifest("asset", asset.id)
     db.session.delete(asset)
 
 
@@ -290,8 +460,70 @@ def permanent_delete_accessory(accessory):
     if not accessory:
         return
     for img in AccessoryImage.query.filter_by(accessory_id=accessory.id).all():
-        delete_image_file(img.image_path)
+        permanent_delete_image_file(img.image_path)
+    _remove_recycle_manifest("accessory", accessory.id)
     db.session.delete(accessory)
+
+
+def _purge_old_recycle_files(cutoff):
+    recycle_root = os.path.join(Config.UPLOAD_FOLDER, RECYCLE_SUBDIR)
+    if not os.path.isdir(recycle_root):
+        return 0
+    removed = 0
+    for current_root, _dirs, files in os.walk(recycle_root, topdown=False):
+        for filename in files:
+            path = os.path.join(current_root, filename)
+            try:
+                if datetime.fromtimestamp(os.path.getmtime(path)) < cutoff:
+                    os.remove(path)
+                    removed += 1
+            except FileNotFoundError:
+                pass
+        try:
+            if current_root != recycle_root and not os.listdir(current_root):
+                os.rmdir(current_root)
+        except OSError:
+            pass
+    return removed
+
+
+def purge_expired_recycle_records(days=RECYCLE_RETENTION_DAYS):
+    """Permanently purge recoverable devices and recycle files older than N days.
+
+    Called by the daily backup job *after* the database/code snapshots are safely
+    written, so the final snapshot still contains records that expire that day.
+    """
+    cutoff = datetime.now() - timedelta(days=int(days))
+    asset_count = 0
+    accessory_count = 0
+
+    expired_assets = Asset.query.filter(
+        Asset.deleted_at.isnot(None),
+        Asset.status == "已删除",
+        Asset.deleted_at < cutoff,
+    ).all()
+    for asset in expired_assets:
+        permanent_delete_asset(asset)
+        asset_count += 1
+    db.session.flush()
+
+    expired_accessories = Accessory.query.filter(
+        Accessory.deleted_at.isnot(None),
+        Accessory.status == "已删除",
+        Accessory.deleted_at < cutoff,
+    ).all()
+    for accessory in expired_accessories:
+        permanent_delete_accessory(accessory)
+        accessory_count += 1
+
+    db.session.commit()
+    file_count = _purge_old_recycle_files(cutoff)
+    return {
+        "assets": asset_count,
+        "accessories": accessory_count,
+        "files": file_count,
+        "days": int(days),
+    }
 
 
 # ---------------------------------------------------------------------------

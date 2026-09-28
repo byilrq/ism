@@ -25,7 +25,13 @@
     }
 
     function notice(form, text, error) {
-        let el = form.querySelector('.ism-upload-status');
+        let el = form.querySelector('[data-ism-upload-status]');
+        if (el) {
+            el.textContent = text;
+            el.style.color = error ? '#b91c1c' : '#66788a';
+            return;
+        }
+        el = form.querySelector('.ism-upload-status');
         if (!el) {
             el = document.createElement('div');
             el.className = 'ism-upload-status';
@@ -41,6 +47,16 @@
     function render(state) {
         const el = state.element;
         el.textContent = '';
+        if (!state.files.length) {
+            el.textContent = '\u672a\u52a0\u8f7d';
+            if (state.message) {
+                const hint = document.createElement('div');
+                hint.textContent = state.message;
+                hint.style.color = '#b45309';
+                el.appendChild(hint);
+            }
+            return;
+        }
         const summary = document.createElement('div');
         const total = state.files.reduce((n, item) => n + item.file.size, 0);
         summary.textContent = '\u5df2\u9009 ' + state.files.length + ' \u5f20\u539f\u56fe\uff08\u6700\u591a5\u5f20\uff09\uff0c\u5171 ' + mb(total) + '\uff0c\u4e0d\u538b\u7f29';
