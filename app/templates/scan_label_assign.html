@@ -36,6 +36,7 @@ button:hover{transform:translateY(-1px);box-shadow:0 12px 22px rgba(46,58,74,.16
 .summary-badge{display:inline-flex;align-items:center;padding:8px 12px;border-radius:999px;background:#eef2f6;color:#4a5767;font-weight:700;border:1px solid #d4dbe4;font-size:14px;}
 @media (max-width:768px){.wrap{padding:8px 8px 10px;}.card{padding:10px 10px 8px;margin-bottom:8px;border-radius:14px;}.video-wrap{aspect-ratio:3/4;max-height:60vh;border-radius:14px;}.scan-box{width:min(82vw,340px);height:min(28vw,120px);border-radius:14px;}.result-box{padding:8px 10px;border-radius:10px;font-size:18px;min-height:46px;}.result-box.empty{font-size:14px;}.action-row{margin-top:8px;gap:8px;}.action-row button,.action-row a button{min-width:102px;}.status-box{margin-top:8px;padding:8px 10px;font-size:13px;}.scan-box:before{left:8px;right:8px;}.summary-badge{padding:7px 10px;font-size:13px;}}
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='skin.css') }}?v={{ skin_version }}">
 <script>
 const assignLocation = {{ assign_location|tojson|safe }};
 const backUrl = {{ back_url|tojson|safe }};
@@ -341,7 +342,7 @@ window.addEventListener('DOMContentLoaded', function(){
 <meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
 <script src="{{ url_for('static', filename='ism-upload.js', v='20260928-ui-v14') }}" defer></script>
 </head>
-<body>
+<body class="ism-app ism-scan">
 <div class="wrap">
     <div class="card">
         <div class="toolbar">

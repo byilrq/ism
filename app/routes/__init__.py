@@ -128,6 +128,12 @@ def location_like(column, value):
     return func.upper(column).like(f"%{value}%")
 
 
+def text_like_ci(column, value):
+    """大小写不敏感的文本模糊匹配，适用于名称、型号、责任人、备注等字段。"""
+    value = normalize_text(value).lower()
+    return func.lower(column).like(f"%{value}%")
+
+
 def prefer_new_value(new_value, old_value=None):
     new_value = normalize_text(new_value)
     if new_value:
@@ -507,22 +513,22 @@ def build_search_rows(keyword="", searched=False):
         if a.id not in number_asset_ids:
             number_asset_ids.append(a.id)
 
-    # 备注支持关键词模糊搜索；为避免短关键词误伤，至少连续 2 个字符才启用备注匹配。
-    # 完整集团编号搜索时，只保留备注模糊匹配，不再按责任人/位置模糊匹配。
-    remark_search_enabled = len(keyword) >= 2 and not is_numeric_identifier_keyword
+    # 备注支持真正的模糊搜索，并显式做大小写不敏感匹配。
+    # 6 位及以上纯数字仍优先按资产编号规则处理，保持编号检索的既有行为。
+    remark_search_enabled = bool(keyword) and not is_numeric_identifier_keyword
 
     # ---- 文本检索：名称 / 型号 / 责任人 / 位置 / 备注，只展示命中项本身，不展开 ----
     # 6 位及以上纯数字按资产编号处理，不再混入文本字段模糊命中。
     text_asset_conditions = []
     if not is_precise_group_keyword and not is_numeric_identifier_keyword:
         text_asset_conditions.extend([
-            Asset.owner.like(f"%{keyword}%"),
+            text_like_ci(Asset.owner, keyword),
             location_like(Asset.location, keyword),
-            Asset.name.like(f"%{keyword}%"),
-            Asset.model.like(f"%{keyword}%")
+            text_like_ci(Asset.name, keyword),
+            text_like_ci(Asset.model, keyword)
         ])
     if remark_search_enabled:
-        text_asset_conditions.append(Asset.remark.like(f"%{keyword}%"))
+        text_asset_conditions.append(text_like_ci(Asset.remark, keyword))
 
     text_assets = []
     if text_asset_conditions:
@@ -626,13 +632,13 @@ def build_search_rows(keyword="", searched=False):
     text_accessory_conditions = []
     if not is_precise_group_keyword and not is_numeric_identifier_keyword:
         text_accessory_conditions.extend([
-            Accessory.owner.like(f"%{keyword}%"),
+            text_like_ci(Accessory.owner, keyword),
             location_like(Accessory.location, keyword),
-            Accessory.name.like(f"%{keyword}%"),
-            Accessory.model.like(f"%{keyword}%")
+            text_like_ci(Accessory.name, keyword),
+            text_like_ci(Accessory.model, keyword)
         ])
     if remark_search_enabled:
-        text_accessory_conditions.append(Accessory.remark.like(f"%{keyword}%"))
+        text_accessory_conditions.append(text_like_ci(Accessory.remark, keyword))
 
     text_accessories = []
     if text_accessory_conditions:
@@ -784,11 +790,13 @@ def build_search_rows(keyword="", searched=False):
         ]
         if not is_precise_group_keyword:
             standalone_conditions.extend([
-                Accessory.owner.like(f"%{keyword}%"),
-                location_like(Accessory.location, keyword)
+                text_like_ci(Accessory.owner, keyword),
+                location_like(Accessory.location, keyword),
+                text_like_ci(Accessory.name, keyword),
+                text_like_ci(Accessory.model, keyword)
             ])
         if remark_search_enabled:
-            standalone_conditions.append(Accessory.remark.like(f"%{keyword}%"))
+            standalone_conditions.append(text_like_ci(Accessory.remark, keyword))
         if suffix_keyword:
             standalone_conditions.append(Accessory.sub_internal_no.like(f"%{suffix_keyword}"))
             standalone_conditions.append(Accessory.sub_group_no.like(f"%{suffix_keyword}-%"))
@@ -1372,6 +1380,33 @@ def register_routes(app):
         end = start + per_page
         rows = all_rows[start:end]
 
+        # 当前页图片数量一次性聚合查询，避免逐行查询造成 N+1。
+        asset_ids = [row["id"] for row in rows if row.get("row_type") == "asset"]
+        accessory_ids = [row["id"] for row in rows if row.get("row_type") == "accessory"]
+        asset_image_counts = {}
+        accessory_image_counts = {}
+
+        if asset_ids:
+            asset_image_counts = dict(
+                db.session.query(AssetImage.asset_id, func.count(AssetImage.id))
+                .filter(AssetImage.asset_id.in_(asset_ids))
+                .group_by(AssetImage.asset_id)
+                .all()
+            )
+        if accessory_ids:
+            accessory_image_counts = dict(
+                db.session.query(AccessoryImage.accessory_id, func.count(AccessoryImage.id))
+                .filter(AccessoryImage.accessory_id.in_(accessory_ids))
+                .group_by(AccessoryImage.accessory_id)
+                .all()
+            )
+
+        for row in rows:
+            if row.get("row_type") == "asset":
+                row["image_count"] = int(asset_image_counts.get(row["id"], 0))
+            else:
+                row["image_count"] = int(accessory_image_counts.get(row["id"], 0))
+
         total_pages = (total + per_page - 1) // per_page if total else 1
         all_filtered_selected_items = [f"{row['row_type']}:{row['id']}" for row in all_rows]
         error = ""
@@ -1888,7 +1923,7 @@ def register_routes(app):
             }
 
             if device_type == "主设备":
-                if status == "开箱":
+                if status in ("开箱", "其它"):
                     number_error = ""
                     if group_no:
                         number_error = validate_asset_group_no(group_no, "集团编号")

@@ -110,8 +110,14 @@ def create_app(test_config=None):
 
     @app.context_processor
     def inject_runtime_status():
+        skin_file = Path(app.static_folder or "") / "skin.css"
+        try:
+            skin_version = str(int(skin_file.stat().st_mtime_ns))
+        except OSError:
+            skin_version = "1"
         return {
-            "backup_status": _backup_status_for_template(app.config.get("UPLOAD_FOLDER", ""))
+            "backup_status": _backup_status_for_template(app.config.get("UPLOAD_FOLDER", "")),
+            "skin_version": skin_version,
         }
 
     return app

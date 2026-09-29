@@ -1,0 +1,396 @@
+/*
+ * ISM visual skin
+ * ------------------------------------------------------------
+ * Replace this file to change the management UI appearance.
+ * Templates and Python code do not need to be edited.
+ * Structural/safety behavior remains in the page templates.
+ */
+
+body.ism-app:not(.ism-scan) {
+  --bg: #f3f5f7;
+  --card: #ffffff;
+  --line: #dfe5eb;
+  --text: #293747;
+  --muted: #75808c;
+  --primary: #5c6f8f;
+  --primary-soft: #eef2f7;
+  --green: #31816d;
+  --green-soft: #edf7f3;
+  --orange: #b27d4e;
+  --orange-soft: #faf1e8;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 8% 0%, rgba(214, 225, 236, .72), transparent 31%),
+    radial-gradient(circle at 94% 12%, rgba(239, 225, 207, .52), transparent 29%),
+    linear-gradient(145deg, #f8f7f4 0%, #f2f5f7 47%, #f7f5f2 100%);
+  background-attachment: fixed;
+}
+
+body.ism-app:not(.ism-scan) .wrap {
+  position: relative;
+}
+
+body.ism-app:not(.ism-scan) .card {
+  background: rgba(255,255,255,.93);
+  border: 1px solid rgba(215,222,230,.9);
+  border-radius: 18px;
+  box-shadow: 0 12px 34px rgba(47,58,72,.075);
+  backdrop-filter: blur(12px);
+}
+
+body.ism-app:not(.ism-scan) h2 {
+  color: #2d3a49;
+  letter-spacing: .2px;
+}
+
+body.ism-app:not(.ism-scan) label {
+  color: #66717d;
+  font-weight: 650;
+}
+
+body.ism-app:not(.ism-scan) input,
+body.ism-app:not(.ism-scan) select,
+body.ism-app:not(.ism-scan) textarea {
+  background: rgba(252,253,254,.96);
+  border-color: #d5dce4;
+  color: #2d3947;
+  box-shadow: inset 0 1px 2px rgba(35,48,62,.025);
+}
+
+body.ism-app:not(.ism-scan) input:focus,
+body.ism-app:not(.ism-scan) select:focus,
+body.ism-app:not(.ism-scan) textarea:focus {
+  border-color: #91a1b4;
+  box-shadow: 0 0 0 4px rgba(92,111,143,.11);
+  background: #fff;
+}
+
+body.ism-app:not(.ism-scan) button {
+  border-radius: 10px;
+  background: linear-gradient(135deg,#6f819d 0%,#52647f 100%);
+  box-shadow: 0 6px 15px rgba(53,68,89,.14);
+  letter-spacing: .05px;
+}
+
+body.ism-app:not(.ism-scan) button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 9px 20px rgba(53,68,89,.18);
+}
+
+body.ism-app:not(.ism-scan) .btn-green,
+body.ism-app:not(.ism-scan) .btn-save-primary,
+body.ism-app:not(.ism-scan) .btn-add-home {
+  background: linear-gradient(135deg,#55aa90 0%,#2f7f69 100%);
+  box-shadow: 0 6px 16px rgba(47,127,105,.17);
+}
+
+body.ism-app:not(.ism-scan) .btn-orange {
+  background: linear-gradient(135deg,#c59a6e 0%,#a86f3e 100%);
+  box-shadow: 0 6px 16px rgba(168,111,62,.16);
+}
+
+body.ism-app:not(.ism-scan) .btn-gray,
+body.ism-app:not(.ism-scan) .btn-reset,
+body.ism-app:not(.ism-scan) .btn-reset-home {
+  background: linear-gradient(135deg,#9aa5b1 0%,#75818e 100%);
+  box-shadow: 0 5px 14px rgba(90,103,118,.13);
+}
+
+body.ism-app:not(.ism-scan) .btn-red {
+  background: linear-gradient(135deg,#d77a7e 0%,#b85158 100%);
+  box-shadow: 0 6px 16px rgba(184,81,88,.16);
+}
+
+body.ism-app:not(.ism-scan) .btn-search,
+body.ism-app:not(.ism-scan) .btn-search-home,
+body.ism-app:not(.ism-scan) .btn-upload-primary {
+  background: linear-gradient(135deg,#6cb9e8 0%,#4d80c8 100%);
+  box-shadow: 0 6px 16px rgba(77,128,200,.17);
+}
+
+body.ism-app:not(.ism-scan) .btn-return-secondary {
+  background: linear-gradient(135deg,#96516b 0%,#71384e 100%);
+  box-shadow: 0 6px 16px rgba(113,56,78,.17);
+}
+
+body.ism-app:not(.ism-scan) .table-wrap {
+  border-color: #dfe5eb;
+  border-radius: 14px;
+  box-shadow: 0 7px 22px rgba(44,57,72,.045);
+}
+
+body.ism-app:not(.ism-scan) thead th {
+  background: linear-gradient(180deg,#fbfcfd 0%,#f2f4f7 100%);
+  color: #64707d;
+}
+
+body.ism-app:not(.ism-scan) tbody tr.result-row:hover td,
+body.ism-app:not(.ism-scan) tbody tr:hover td {
+  background: #f1f5f8;
+}
+
+body.ism-app:not(.ism-scan) .summary-badge {
+  background: rgba(239,243,247,.92);
+  border-color: #dbe2e9;
+  color: #5d6875;
+}
+
+body.ism-app:not(.ism-scan) .topbar-brand {
+  color: #344254;
+}
+
+body.ism-app:not(.ism-scan) .topbar-brand img {
+  box-shadow: 0 4px 12px rgba(55,69,86,.13);
+}
+
+body.ism-app:not(.ism-scan) .topbar-path,
+body.ism-app:not(.ism-scan) .backup-stamp,
+body.ism-app:not(.ism-scan) .muted {
+  color: #7a8591;
+}
+
+body.ism-app:not(.ism-scan) .switch-row .tab-btn {
+  background: rgba(249,250,252,.94);
+  border-color: #dde3e9;
+  color: #66717e;
+  box-shadow: 0 4px 12px rgba(58,72,88,.05);
+}
+
+body.ism-app:not(.ism-scan) .switch-row .tab-btn.tab-active-asset {
+  background: linear-gradient(135deg,#efe1bc 0%,#e4ce99 100%);
+  border-color: #d8c28f;
+  color: #655231;
+}
+
+body.ism-app:not(.ism-scan) .simple-modal-card,
+body.ism-app:not(.ism-scan) .upload-dialog-card {
+  border: 1px solid #e1e6ec;
+  box-shadow: 0 22px 60px rgba(35,48,64,.22);
+}
+
+/* Import toolbar: three compact equal-width buttons + help icon on one row. */
+body.ism-app .import-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+body.ism-app .import-action-btn {
+  width: 88px !important;
+  min-width: 88px !important;
+  max-width: 88px !important;
+  padding-left: 8px !important;
+  padding-right: 8px !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.ism-app .import-help-wrap {
+  flex: 0 0 auto;
+  margin-left: auto;
+  order: 20;
+  position: relative;
+}
+
+body.ism-app .import-help-btn {
+  width: 28px !important;
+  min-width: 28px !important;
+  height: 28px !important;
+  padding: 0 !important;
+  background: rgba(245,247,249,.96) !important;
+  color: #667586 !important;
+  border: 1px solid #d5dde5 !important;
+  box-shadow: none !important;
+}
+
+body.ism-app .import-help-btn:hover {
+  background: #edf1f5 !important;
+  color: #445468 !important;
+  transform: none !important;
+}
+
+body.ism-app .import-help-popover {
+  left: auto !important;
+  right: 0 !important;
+  top: calc(100% + 8px) !important;
+  transform: none !important;
+  width: min(360px, calc(100vw - 32px)) !important;
+}
+
+/* Recycle and logout visuals are intentionally controlled by the skin. */
+body.ism-app:not(.ism-scan) .btn-recycle {
+  background: linear-gradient(135deg,#f1f6f5 0%,#e4efeb 100%);
+  color: #477a6b;
+  border: 1px solid #d8e6e1;
+  box-shadow: 0 5px 13px rgba(62,111,96,.09);
+}
+
+body.ism-app:not(.ism-scan) .btn-recycle:hover {
+  background: linear-gradient(135deg,#eaf3f0 0%,#d9e9e4 100%);
+  color: #316b5a;
+  box-shadow: 0 8px 17px rgba(62,111,96,.13);
+}
+
+/* Logout button: restore the original glossy 3D red power-button style. */
+body.ism-app:not(.ism-scan) .btn-power {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 32% 28%,#f47d82 0%,#e45f65 34%,#cb4049 70%,#aa2733 100%);
+  box-shadow: inset 0 2px 3px rgba(255,255,255,.38),
+              inset 0 -6px 10px rgba(120,10,20,.18),
+              0 2px 0 #8f1f2b,
+              0 8px 16px rgba(146,24,36,.28);
+  color: #fff;
+  position: relative;
+}
+
+body.ism-app:not(.ism-scan) .btn-power::before {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 999px;
+  border: 1.2px solid rgba(120,18,28,.28);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.18);
+}
+
+body.ism-app:not(.ism-scan) .btn-power svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 1px 0 rgba(120,10,20,.18));
+  position: relative;
+  z-index: 1;
+}
+
+body.ism-app:not(.ism-scan) .btn-power:hover {
+  background: radial-gradient(circle at 32% 28%,#fb8d92 0%,#ea676d 34%,#d24750 70%,#b12c37 100%);
+  color: #fff;
+  box-shadow: inset 0 2px 3px rgba(255,255,255,.42),
+              inset 0 -6px 10px rgba(120,10,20,.22),
+              0 2px 0 #8f1f2b,
+              0 12px 22px rgba(146,24,36,.36);
+}
+
+body.ism-app .import-log-link {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 768px) {
+  body.ism-app:not(.ism-scan) .card {
+    border-radius: 15px;
+    box-shadow: 0 8px 24px rgba(47,58,72,.065);
+  }
+
+  body.ism-app .import-toolbar {
+    gap: 5px;
+    flex-wrap: wrap;
+  }
+
+  body.ism-app .import-action-btn {
+    width: 82px !important;
+    min-width: 82px !important;
+    max-width: 82px !important;
+    padding: 9px 5px !important;
+    font-size: 14px !important;
+  }
+
+  body.ism-app .import-help-btn {
+    width: 26px !important;
+    min-width: 26px !important;
+    height: 26px !important;
+    font-size: 15px !important;
+  }
+
+  body.ism-app .import-help-popover {
+    width: min(330px, calc(100vw - 28px)) !important;
+  }
+
+  body.ism-app .import-log-link {
+    order: 30;
+    flex-basis: 100%;
+    margin-top: 2px;
+  }
+}
+
+@media (max-width: 350px) {
+  body.ism-app .import-action-btn {
+    width: 77px !important;
+    min-width: 77px !important;
+    max-width: 77px !important;
+    font-size: 13px !important;
+  }
+  body.ism-app .import-toolbar { gap: 4px; }
+  body.ism-app .import-help-btn {
+    width: 24px !important;
+    min-width: 24px !important;
+    height: 24px !important;
+  }
+}
+
+/* Detail-page image upload trigger: camera icon only. */
+body.ism-app:not(.ism-scan) .upload-actions .upload-camera-btn {
+  width: 44px !important;
+  min-width: 44px !important;
+  max-width: 44px !important;
+  height: 40px !important;
+  padding: 0 !important;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #cfd9e4;
+  border-radius: 11px;
+  background: linear-gradient(145deg,#f8fbfd 0%,#e9f0f6 100%);
+  color: #415a73;
+  box-shadow: 0 4px 11px rgba(53,75,98,.11);
+}
+
+body.ism-app:not(.ism-scan) .upload-actions .upload-camera-btn svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+body.ism-app:not(.ism-scan) .upload-actions .upload-camera-btn:hover:not(:disabled) {
+  background: linear-gradient(145deg,#ffffff 0%,#e2edf6 100%);
+  color: #2f4d69;
+  border-color: #b8c8d8;
+  box-shadow: 0 7px 15px rgba(53,75,98,.16);
+}
+
+body.ism-app:not(.ism-scan) .upload-actions .upload-camera-btn:disabled {
+  opacity: .52;
+  transform: none;
+  box-shadow: 0 2px 6px rgba(53,75,98,.06);
+}
+
+@media (max-width: 768px) {
+  body.ism-app:not(.ism-scan) .upload-actions .upload-camera-btn {
+    width: 42px !important;
+    min-width: 42px !important;
+    max-width: 42px !important;
+    height: 38px !important;
+  }
+  body.ism-app:not(.ism-scan) .upload-actions .upload-camera-btn svg {
+    width: 21px;
+    height: 21px;
+  }
+}

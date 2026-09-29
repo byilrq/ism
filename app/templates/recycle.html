@@ -50,10 +50,11 @@ form{display:inline;}
 .modal-dialog .btn-cancel{background:linear-gradient(135deg,#8b95a1 0%,#697380 100%);flex:1;}
 .modal-dialog .btn-confirm{background:linear-gradient(135deg,#d06f72 0%,#b34f55 100%);flex:1;}
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='skin.css') }}?v={{ skin_version }}">
 <meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
 <script src="{{ url_for('static', filename='ism-upload.js', v='20260928-ui-v14') }}" defer></script>
 </head>
-<body>
+<body class="ism-app">
 <div class="wrap">
   <div class="topbar">
     <h2>📋 回收站（90天可恢复）</h2>

@@ -37,8 +37,8 @@ button:disabled{cursor:not-allowed;transform:none;box-shadow:none;}
 .btn-reset-home:hover{background:linear-gradient(135deg,#d0d7df 0%,#8d98a6 100%);}
 .btn-add-home{background:linear-gradient(135deg,#54ddb1 0%,#159f76 100%);box-shadow:0 10px 18px rgba(21,159,118,.2);}
 .btn-add-home:hover{background:linear-gradient(135deg,#64e4ba 0%,#0f956d 100%);}
-.btn-recycle{background:#f0f5f0;box-shadow:none;padding:0;width:44px;height:44px;display:flex;align-items:center;justify-content:center;border:none;border-radius:12px;transition:all .2s ease;color:#2f7d67;}
-.btn-recycle:hover{background:#e8f2eb;transform:scale(1.05);}
+.btn-recycle{padding:0;width:44px;height:44px;display:flex;align-items:center;justify-content:center;border:none;border-radius:12px;transition:all .2s ease;}
+.btn-recycle:hover{transform:translateY(-1px);}
 .btn-search{background:linear-gradient(135deg,#67c9ff 0%,#3388ff 100%);color:#fff;}
 .btn-search:hover{background:linear-gradient(135deg,#7ad1ff 0%,#247dff 100%);transform:scale(1.05);}
 .btn-reset{background:linear-gradient(135deg,#8b95a1 0%,#697380 100%);color:#fff;}
@@ -48,7 +48,7 @@ button:disabled{cursor:not-allowed;transform:none;box-shadow:none;}
 }
 .btn-disabled{background:#adb5bd !important;color:#fff !important;cursor:not-allowed;pointer-events:none;box-shadow:none !important;}
 .table-wrap{overflow-x:auto;border:1px solid #d7dee7;border-radius:16px;background:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.8),0 8px 22px rgba(27,39,53,.04);}
-table{width:100%;border-collapse:separate;border-spacing:0;min-width:940px;}
+table{width:100%;border-collapse:separate;border-spacing:0;min-width:1000px;}
 th,td{padding:11px 10px;text-align:left;border:none;border-right:1px solid #e7eef7;border-bottom:1px solid #e7eef7;vertical-align:middle;font-size:15px;font-weight:400;color:#6f7b88;}th:last-child,td:last-child{border-right:none;}
 thead th{position:sticky;top:0;z-index:1;background:linear-gradient(180deg,#fafbfd 0%,#eff2f6 100%);color:#5e6977;font-weight:600;white-space:nowrap;text-align:center;}
 tbody tr:last-child td{border-bottom:none;}
@@ -69,6 +69,13 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .sort-link{display:inline-flex;align-items:center;gap:4px;color:#5e6977;text-decoration:none;font-weight:600;}
 .sort-link:hover{color:#3f4853;text-decoration:none;}
 .action-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+.import-action-btn{width:120px !important;min-width:120px !important;max-width:120px !important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.import-help-wrap{position:relative;display:inline-flex;align-items:center;}
+.import-help-btn{width:28px;min-width:28px;height:28px;padding:0;border-radius:999px;background:#eef2f6;color:#526170;border:1px solid #cfd8e2;box-shadow:none;font-size:17px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;line-height:1;}
+.import-help-btn:hover{background:#e5ebf1;color:#344252;box-shadow:none;transform:none;}
+.import-help-popover{display:none;position:absolute;left:auto;right:0;top:calc(100% + 8px);transform:none;z-index:30;width:min(360px,calc(100vw - 32px));padding:10px 12px;border:1px solid #d5dde7;border-radius:12px;background:#fff;color:#5c6876;font-size:13px;line-height:1.65;box-shadow:0 12px 28px rgba(38,50,67,.16);}
+.import-help-popover.show{display:block;}
+@media (max-width:768px){.import-help-popover{left:auto;right:0;top:calc(100% + 8px);transform:none;width:min(330px,calc(100vw - 28px));}.import-action-btn{width:112px !important;min-width:112px !important;max-width:112px !important;}}
 .pagination{margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
 .pagination a,.pagination span{display:inline-flex;align-items:center;justify-content:center;min-height:38px;padding:0 14px;border-radius:999px;border:1px solid #d7e3f1;background:#fff;color:#334155;text-decoration:none;}
 .pagination a:hover{background:#f1f4f7;border-color:#c7d0db;}
@@ -78,10 +85,9 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .icon-only-btn svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;}
 .log-link{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;background:transparent;border:none;padding:0 2px;font-size:23px;line-height:1;color:inherit;cursor:pointer;}.log-link:hover{background:transparent;transform:scale(1.08);}
 .power-link{display:inline-flex;text-decoration:none;}
-.btn-power{width:28px;min-width:28px;height:28px;padding:0;border:none;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:radial-gradient(circle at 32% 28%,#f47d82 0%,#e45f65 34%,#cb4049 70%,#aa2733 100%);box-shadow:inset 0 2px 3px rgba(255,255,255,.38),inset 0 -6px 10px rgba(120,10,20,.18),0 2px 0 #8f1f2b,0 8px 16px rgba(146,24,36,.28);color:#fff;position:relative;}
-.btn-power::before{content:'';position:absolute;inset:3px;border-radius:999px;border:1.2px solid rgba(120,18,28,.28);box-shadow:inset 0 1px 0 rgba(255,255,255,.18);}
-.btn-power svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 1px 0 rgba(120,10,20,.18));position:relative;z-index:1;}
-.btn-power:hover{background:radial-gradient(circle at 32% 28%,#fb8d92 0%,#ea676d 34%,#d24750 70%,#b12c37 100%);box-shadow:inset 0 2px 3px rgba(255,255,255,.42),inset 0 -6px 10px rgba(120,10,20,.22),0 2px 0 #8f1f2b,0 12px 22px rgba(146,24,36,.36);}
+.btn-power{width:30px;min-width:30px;height:30px;padding:0;border:1px solid transparent;border-radius:10px;display:inline-flex;align-items:center;justify-content:center;box-shadow:none;position:relative;}
+.btn-power::before{content:none;}
+.btn-power svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2.35;stroke-linecap:round;stroke-linejoin:round;position:relative;z-index:1;}
 .switch-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
 .switch-row a{flex:1 1 160px;}
 .switch-row a button{width:100%;}
@@ -105,7 +111,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 @media (max-width:768px){
 .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
 .table-wrap table{width:max-content;table-layout:auto !important;}
-.asset-search-table{min-width:1220px !important;}
+.asset-search-table{min-width:1280px !important;}
 .asset-location-table{min-width:1120px !important;}
 .asset-accessory-table{min-width:980px !important;}
 .asset-search-table th:nth-child(2),.asset-search-table td:nth-child(2),
@@ -119,6 +125,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .table-wrap table .num-link{display:inline-block;white-space:nowrap !important;overflow:visible !important;text-overflow:clip !important;max-width:none !important;word-break:normal !important;}
 }
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='skin.css') }}?v={{ skin_version }}">
 <script>
 function getVisibleSelectionInputs(){
     return Array.from(document.querySelectorAll('#asset-batch-form input[type="checkbox"][name="selected_items"]'));
@@ -316,7 +323,7 @@ function confirmDeleteSelected(){
 <meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
 <script src="{{ url_for('static', filename='ism-upload.js', v='20260928-ui-v14') }}" defer></script>
 </head>
-<body>
+<body class="ism-app">
 <div class="wrap">
     <div class="card">
         <div class="topbar">
@@ -373,26 +380,48 @@ function confirmDeleteSelected(){
         </form>
 
         <form id="upload-form" method="post" enctype="multipart/form-data" style="margin-top:12px;">
-            <div class="action-bar">
+            <div class="import-toolbar">
                 <input type="file" name="excel_file" id="upload-file-input" accept=".xlsx,.xlsm,.xltx,.xltm" style="display:none;" {% if not can_manage %}disabled{% endif %}>
-                <button type="button" id="upload-select-btn" class="btn-gray" onclick="document.getElementById('upload-file-input').click();" style="width:auto;min-width:120px;" {% if not can_manage %}disabled{% endif %}>选择文件</button>
-                <button type="submit" class="btn-orange {% if not can_manage %}btn-disabled{% endif %}" onclick="document.getElementById('upload-form').action='/import_devices';" {% if not can_manage %}disabled{% endif %}>上传设备</button>
-                <button type="submit" class="btn-orange {% if not can_manage %}btn-disabled{% endif %}" onclick="document.getElementById('upload-form').action='/import_accessories';" {% if not can_manage %}disabled{% endif %}>上传配件</button>
-                {% if import_log_url %}<a href="{{ import_log_url }}"><button type="button" class="btn-gray">下载失败日志</button></a>{% endif %}
+                <button type="button" id="upload-select-btn" class="btn-gray import-action-btn" onclick="document.getElementById('upload-file-input').click();" {% if not can_manage %}disabled{% endif %}>选择文件</button>
+                <button type="submit" class="btn-orange import-action-btn {% if not can_manage %}btn-disabled{% endif %}" onclick="document.getElementById('upload-form').action='/import_devices';" {% if not can_manage %}disabled{% endif %}>上传设备</button>
+                <button type="submit" class="btn-orange import-action-btn {% if not can_manage %}btn-disabled{% endif %}" onclick="document.getElementById('upload-form').action='/import_accessories';" {% if not can_manage %}disabled{% endif %}>上传配件</button>
+                {% if import_log_url %}<a class="import-log-link" href="{{ import_log_url }}"><button type="button" class="btn-gray">下载失败日志</button></a>{% endif %}
+                <span class="import-help-wrap">
+                    <button type="button" id="import-help-btn" class="import-help-btn" title="导入说明" aria-expanded="false" aria-controls="import-help-popover">?</button>
+                    <span id="import-help-popover" class="import-help-popover" role="note">上传设备：普通导入。上传配件：根据配件编号匹配主资产，未匹配则跳过。</span>
+                </span>
             </div>
-            <div class="muted" style="margin-top:8px;">上传设备：普通导入。上传配件：根据配件编号匹配主资产，未匹配则跳过。</div>
         </form>
         <script>
         document.getElementById('upload-file-input').addEventListener('change', function(){
             const btn = document.getElementById('upload-select-btn');
             if(this.files && this.files.length > 0){
                 btn.textContent = this.files[0].name;
-                btn.className = 'btn-green';
+                btn.title = this.files[0].name;
+                btn.className = 'btn-green import-action-btn';
             }else{
                 btn.textContent = '选择文件';
-                btn.className = 'btn-gray';
+                btn.title = '';
+                btn.className = 'btn-gray import-action-btn';
             }
         });
+        (function(){
+            const helpBtn = document.getElementById('import-help-btn');
+            const help = document.getElementById('import-help-popover');
+            if(!helpBtn || !help){ return; }
+            helpBtn.addEventListener('click', function(event){
+                event.stopPropagation();
+                const willShow = !help.classList.contains('show');
+                help.classList.toggle('show', willShow);
+                helpBtn.setAttribute('aria-expanded', willShow ? 'true' : 'false');
+            });
+            document.addEventListener('click', function(event){
+                if(!help.classList.contains('show')){ return; }
+                if(help.contains(event.target) || helpBtn.contains(event.target)){ return; }
+                help.classList.remove('show');
+                helpBtn.setAttribute('aria-expanded', 'false');
+            });
+        })();
         </script>
         {% if error %}<div class="err">{{ error }}</div>{% endif %}
     </div>
@@ -418,7 +447,7 @@ function confirmDeleteSelected(){
                     <thead>
                         <tr>
                             <th><input type="checkbox" id="select-all-filtered" onclick="syncAllFilteredSelection(this)" title="选中当前筛选结果全部"></th>
-                            <th>集团编号</th><th>内部编号</th><th>资产名称</th><th>位置</th><th>状态</th><th>责任人</th>
+                            <th>集团编号</th><th>内部编号</th><th>资产名称</th><th>位置</th><th>状态</th><th>责任人</th><th>图片</th>
                             <th>
                                 <a class="sort-link" href="/?searched=1&keyword={{ keyword }}&status_filter={{ status_filter }}&device_type_filter={{ device_type_filter }}&model_filter={{ model_filter }}&per_page={{ per_page }}&page=1&sort_field=asset_date&sort_order={% if sort_field == 'asset_date' and sort_order == 'desc' %}asc{% else %}desc{% endif %}">
                                     时间{% if sort_field == 'asset_date' %}{{ ' ↑' if sort_order == 'asc' else ' ↓' }}{% else %} ↕{% endif %}
@@ -434,10 +463,10 @@ function confirmDeleteSelected(){
                             <td><a class="num-link" href="{{ item.detail_url }}">{{ item.internal_no }}</a></td>
                             <td>{{ item.name }}</td>
                             <td>{% if item.location_detail_url %}<a class="num-link" href="{{ item.location_detail_url }}">{{ item.location }}</a>{% else %}{{ item.location or '' }}{% endif %}</td>
-                            <td>{{ item.status }}</td><td>{{ item.owner }}</td><td>{{ item.asset_date_text or "" }}</td>
+                            <td>{{ item.status }}</td><td>{{ item.owner }}</td><td style="text-align:center;">{{ item.image_count }}</td><td>{{ item.asset_date_text or "" }}</td>
                         </tr>
                         {% endfor %}
-                        {% if not rows %}<tr class="empty-row"><td colspan="8">暂无数据</td></tr>{% endif %}
+                        {% if not rows %}<tr class="empty-row"><td colspan="9">暂无数据</td></tr>{% endif %}
                     </tbody>
                 </table>
             </div>

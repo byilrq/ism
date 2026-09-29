@@ -111,6 +111,7 @@ tbody tr:hover td{background:#eff3f7;}
 .table-wrap table .num-link{display:inline-block;white-space:nowrap !important;overflow:visible !important;text-overflow:clip !important;max-width:none !important;word-break:normal !important;}
 }
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='skin.css') }}?v={{ skin_version }}">
 <script>
 function focusCamera(){
     if(!scanStream){ return; }
@@ -338,7 +339,7 @@ function requestInventory(formId, message){
 <meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
 <script src="{{ url_for('static', filename='ism-upload.js', v='20260928-ui-v14') }}" defer></script>
 </head>
-<body>
+<body class="ism-app">
 <div class="wrap">
     <div class="card">
         <div class="title-row">
@@ -362,7 +363,7 @@ function requestInventory(formId, message){
                 <div class="row"><label>状态</label><select class="edit-field readonly" disabled name="status"><option value="">请选择</option>{% for s in statuses %}<option value="{{ s.dict_value }}" {% if (accessory.status or '') == s.dict_value %}selected{% endif %}>{{ s.dict_value }}</option>{% endfor %}</select></div>
                 <div class="row">
                     <label>上传图片（最多5张）</label>
-                    <div class="upload-inline"><div class="upload-actions"><button type="button" class="edit-field readonly" disabled onclick='openUploadChooser("accessory-upload-choice-dialog", this)'>上传图片</button></div><div class="upload-inline-meta"><div id="accessory-image-files-text" class="file-list" data-inputs="accessory-camera-files,accessory-file-files">未加载</div><div class="upload-inline-status" data-ism-upload-status role="status" aria-live="polite"></div></div></div>
+                    <div class="upload-inline"><div class="upload-actions"><button type="button" class="edit-field readonly upload-camera-btn" disabled title="上传图片" aria-label="上传图片" onclick='openUploadChooser("accessory-upload-choice-dialog", this)'><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l1.5-2h7L17 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2z"></path><circle cx="12" cy="13" r="4"></circle></svg></button></div><div class="upload-inline-meta"><div id="accessory-image-files-text" class="file-list" data-inputs="accessory-camera-files,accessory-file-files">未加载</div><div class="upload-inline-status" data-ism-upload-status role="status" aria-live="polite"></div></div></div>
                     <div style="display:none;">
                         <input type="file" id="accessory-camera-files" name="image_files" accept="image/*" capture="environment" multiple onchange="updateSelectedFiles('accessory-camera-files', 'accessory-image-files-text', 'accessory-upload-choice-dialog')">
                         <input type="file" id="accessory-file-files" name="image_files" accept="image/*" multiple onchange="updateSelectedFiles('accessory-file-files', 'accessory-image-files-text', 'accessory-upload-choice-dialog')">

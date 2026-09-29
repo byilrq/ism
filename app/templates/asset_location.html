@@ -133,6 +133,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 
 .storage-info-row{display:flex;align-items:center;gap:12px;flex:1 1 420px;min-width:0;justify-content:space-between;}.storage-path{font-size:13px;color:#6f7b88;word-break:break-all;min-width:0;}.backup-stamp{flex:0 0 auto;white-space:nowrap;font-size:13px;color:#6f7b88;}.backup-stamp.backup-failed{color:#c62828;font-weight:700;}@media(max-width:768px){.storage-info-row{width:100%;flex-basis:100%;gap:10px;}.backup-stamp{margin-left:auto;text-align:right;}}
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='skin.css') }}?v={{ skin_version }}">
 <script>
 
 
@@ -148,7 +149,7 @@ function confirmLocationSave(){ return confirm('确认保存货架位置和图�
 <meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
 <script src="{{ url_for('static', filename='ism-upload.js', v='20260928-ui-v14') }}" defer></script>
 </head>
-<body>
+<body class="ism-app">
 <div class="wrap">
     <div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;"><span style="display:inline-flex;align-items:center;gap:8px;font-size:18px;font-weight:800;color:#263646;"><img src="{{ url_for('static', filename='login.webp', v='20260927-login-v2') }}" alt="资产管理系统" width="34" height="34" style="width:34px;height:34px;border-radius:50%;object-fit:cover;">资产管理系统</span><div class="storage-info-row"><span class="storage-path"><strong>存储路径：</strong>{{ config.get('UPLOAD_FOLDER', '') }}</span><span class="backup-stamp{% if not backup_status.ok %} backup-failed{% endif %}" title="{{ backup_status.title }}"><strong>备份：</strong>{{ backup_status.date }}</span></div></div></div>
 
@@ -167,7 +168,7 @@ function confirmLocationSave(){ return confirm('确认保存货架位置和图�
                 <div class="row">
                     <label>上传货架图片（最多5张）</label>
                     <div class="upload-inline"><div class="upload-actions">
-                        <button type="button" class="{{ 'edit-field readonly' if readonly else '' }} {% if not can_manage %}btn-disabled{% endif %}" {% if readonly or not can_manage %}disabled{% endif %} onclick='openUploadChooser("asset-location-upload-choice-dialog", this)'>上传图片</button>
+                        <button type="button" class="{{ 'edit-field readonly' if readonly else '' }} {% if not can_manage %}btn-disabled{% endif %} upload-camera-btn" {% if readonly or not can_manage %}disabled{% endif %} title="上传图片" aria-label="上传图片" onclick='openUploadChooser("asset-location-upload-choice-dialog", this)'><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l1.5-2h7L17 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2z"></path><circle cx="12" cy="13" r="4"></circle></svg></button>
                     </div><div class="upload-inline-meta"><div id="asset-location-image-files-text" class="file-list" data-inputs="asset-location-camera-files,asset-location-file-files">未加载</div><div class="upload-inline-status" data-ism-upload-status role="status" aria-live="polite"></div></div></div>
                     <div style="display:none;">
                         <input type="file" id="asset-location-camera-files" name="image_files" accept="image/*" capture="environment" multiple onchange="updateSelectedFiles('asset-location-camera-files', 'asset-location-image-files-text', 'asset-location-upload-choice-dialog')">

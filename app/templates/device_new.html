@@ -85,6 +85,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .simple-modal-actions button{width:auto;min-width:118px;padding:11px 18px;font-size:17px;font-weight:700;border-radius:12px;border:none;}
 .simple-modal-cancel{background:#6b7280;color:#fff;}
 .simple-modal-ok{background:#b91c1c;color:#fff;}
+.simple-modal-save{background:linear-gradient(135deg,#54ddb1 0%,#159f76 100%);color:#fff;}
 @media (max-width:768px){.wrap{padding:14px 12px 20px;}.card{padding:16px;margin-bottom:14px;border-radius:14px;}.grid{grid-template-columns:1fr;}h2{font-size:22px;}.switch-row{gap:8px;}.switch-row a{flex:1 1 160px;}input,select,textarea,button{padding:10px;font-size:16px;border-radius:8px;}.upload-choice-file{padding:10px;font-size:16px;border-radius:8px;}.upload-dialog-card{border-radius:14px;padding:16px;width:min(320px,calc(100vw - 20px));}.simple-modal{padding:16px;}.simple-modal-card{border-radius:16px;padding:18px 16px;}.simple-modal-title{font-size:20px;}.simple-modal-text{font-size:16px;}.simple-modal-input{padding:10px 12px;font-size:16px;border-radius:8px;}.simple-modal-actions button{min-width:108px;padding:10px 16px;font-size:16px;border-radius:10px;}}
 
 .asset-search-table th:nth-child(2),.asset-search-table td:nth-child(2),
@@ -115,6 +116,7 @@ tbody tr.empty-row td{background:#fbfdff;color:#6f7b88;text-align:center;padding
 .table-wrap table .num-link{display:inline-block;white-space:nowrap !important;overflow:visible !important;text-overflow:clip !important;max-width:none !important;word-break:normal !important;}
 }
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='skin.css') }}?v={{ skin_version }}">
 <script>
 // 标签扫描弹窗 - 完整相机OCR
 var scanStream = null;
@@ -215,14 +217,47 @@ function validateAccessoryGroupNoValue(value, internalNo){
     return /^\\d{18}-\\d+$/.test(value) ? '' : '附属资产集团编号必须为18位主编号-序号';
 }
 
+let pendingDeviceSaveForm = null;
+
+function openDeviceSaveConfirm(form){
+    pendingDeviceSaveForm = form;
+    const modal = document.getElementById('device-save-confirm-modal');
+    if(modal){ modal.classList.add('show'); }
+}
+
+function closeDeviceSaveConfirm(){
+    const modal = document.getElementById('device-save-confirm-modal');
+    if(modal){ modal.classList.remove('show'); }
+    pendingDeviceSaveForm = null;
+}
+
+function submitConfirmedDeviceSave(){
+    const form = pendingDeviceSaveForm;
+    if(!form){ return; }
+    const modal = document.getElementById('device-save-confirm-modal');
+    if(modal){ modal.classList.remove('show'); }
+    pendingDeviceSaveForm = null;
+    form.dataset.saveConfirmed = '1';
+    if(typeof form.requestSubmit === 'function'){
+        form.requestSubmit();
+    }else{
+        form.submit();
+    }
+}
+
 function confirmDeviceSave(form){
+    if(form.dataset.saveConfirmed === '1'){
+        delete form.dataset.saveConfirmed;
+        return true;
+    }
     const deviceType = (form.querySelector('[name="device_type"]') || {}).value || '主设备';
     const statusEl = form.querySelector('[name="status"]');
-    const isUnboxing = statusEl && statusEl.value === '开箱';
-    if(isUnboxing && deviceType === '主设备'){
+    const isAutoNumberStatus = statusEl && (statusEl.value === '开箱' || statusEl.value === '其它');
+    if(isAutoNumberStatus && deviceType === '主设备'){
         const groupNo = ((form.querySelector('[name="group_no"]') || {}).value || '').trim();
         if(groupNo){ const msg = validateAssetGroupNoValue(groupNo); if(msg){ alert(msg); return false; } }
-        return confirm('确认保存吗？');
+        openDeviceSaveConfirm(form);
+        return false;
     }
     const groupNo = ((form.querySelector('[name="group_no"]') || {}).value || '').trim();
     const internalNo = ((form.querySelector('[name="internal_no"]') || {}).value || '').trim();
@@ -230,7 +265,8 @@ function confirmDeviceSave(form){
         const msg = deviceType === '配件' ? validateAccessoryGroupNoValue(groupNo, internalNo) : validateAssetGroupNoValue(groupNo);
         if(msg){ alert(msg); return false; }
     }
-    return confirm('确认保存吗？');
+    openDeviceSaveConfirm(form);
+    return false;
 }
 
 
@@ -239,14 +275,14 @@ function confirmDeviceSave(form){
 <meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
 <script src="{{ url_for('static', filename='ism-upload.js', v='20260928-ui-v14') }}" defer></script>
 </head>
-<body>
+<body class="ism-app">
 <div class="wrap">
     <div class="card">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
             <h2 style="margin:0;">新增设备</h2>
             <a href="/"><button type="button" class="btn-return-secondary" style="width:auto;min-width:108px;">返回</button></a>
         </div>
-        <div style="color:#666;margin-bottom:10px;">内部编号和集团编号至少填写一个。选择"开箱"状态时，集团编号和内部编号均可空，内部编号留空将自动填入12位时间戳。</div>
+        <div style="color:#666;margin-bottom:10px;">内部编号和集团编号至少填写一个。选择“开箱”或“其它”状态时，集团编号和内部编号均可空，内部编号留空将自动填入12位时间码。</div>
         {% if error %}<div class="err">{{ error }}</div>{% endif %}
         <form method="post" action="{{ url_for('device_new') }}" enctype="multipart/form-data" onsubmit="return confirmDeviceSave(this);">
             <input type="hidden" name="parent_asset_id" value="{{ form_data.parent_asset_id }}">
@@ -277,9 +313,9 @@ function confirmDeviceSave(form){
                 <div class="row">
                     <label>上传图片（最多5张）</label>
                     <div class="upload-actions">
-                        <button type="button" class="btn-upload-primary" onclick='openUploadChooser("device-upload-choice-dialog", this)'>上传图片</button>
+                        <button type="button" class="upload-camera-btn" title="上传图片" aria-label="上传图片" onclick='openUploadChooser("device-upload-choice-dialog", this)'><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l1.5-2h7L17 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2z"></path><circle cx="12" cy="13" r="4"></circle></svg></button>
                     </div>
-                    <div id="device-image-files-text" class="file-list" data-inputs="device-camera-files,device-file-files">未选择图片</div>
+                    <div id="device-image-files-text" class="file-list" data-inputs="device-camera-files,device-file-files">未加载</div>
                     <div style="display:none;">
                         <input type="file" id="device-camera-files" name="image_files" accept="image/*" capture="environment" multiple onchange="updateSelectedFiles('device-camera-files', 'device-image-files-text', 'device-upload-choice-dialog')">
                         <input type="file" id="device-file-files" name="image_files" accept="image/*" multiple onchange="updateSelectedFiles('device-file-files', 'device-image-files-text', 'device-upload-choice-dialog')">
@@ -289,6 +325,16 @@ function confirmDeviceSave(form){
             <div class="row"><label>备注</label><textarea name="remark">{{ form_data.remark }}</textarea></div>
             <div style="margin-top:12px;"><button type="submit" class="btn-save-primary">保存</button></div>
         </form>
+    </div>
+</div>
+<div id="device-save-confirm-modal" class="simple-modal" onclick="if(event.target === this){closeDeviceSaveConfirm();}">
+    <div class="simple-modal-card" role="dialog" aria-modal="true" aria-labelledby="device-save-confirm-title">
+        <div id="device-save-confirm-title" class="simple-modal-title">确认保存</div>
+        <div class="simple-modal-text">确认保存新增设备吗？</div>
+        <div class="simple-modal-actions">
+            <button type="button" class="simple-modal-cancel" onclick="closeDeviceSaveConfirm()">取消</button>
+            <button type="button" class="simple-modal-save" onclick="submitConfirmedDeviceSave()">确认保存</button>
+        </div>
     </div>
 </div>
 <div id="device-upload-choice-dialog" class="upload-dialog" onclick="if(event.target === this){closeUploadChooser('device-upload-choice-dialog');}">
