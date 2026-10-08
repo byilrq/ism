@@ -145,9 +145,18 @@ body.ism-app:not(.ism-scan) .topbar-brand img {
 }
 
 body.ism-app:not(.ism-scan) .topbar-path,
-body.ism-app:not(.ism-scan) .backup-stamp,
 body.ism-app:not(.ism-scan) .muted {
   color: #7a8591;
+}
+
+body.ism-app:not(.ism-scan) .backup-stamp {
+  color: #2e7d32;
+  font-weight: 700;
+}
+
+body.ism-app:not(.ism-scan) .backup-stamp.backup-failed {
+  color: #c62828;
+  font-weight: 700;
 }
 
 body.ism-app:not(.ism-scan) .switch-row .tab-btn {

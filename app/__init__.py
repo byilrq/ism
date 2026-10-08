@@ -84,7 +84,12 @@ def _storage_status_for_template(upload_folder):
     return dict(value)
 
 def _backup_status_for_template(upload_folder):
-    """Read only the local status file; never touch a possibly slow remote mount during page render."""
+    """Show the last successful backup date; red means the latest completed v2 run failed.
+
+    Storage health has its own independent red/green indicator. A stale date by itself
+    is not a failure. Legacy v16-v24 status files are normalised to green when they
+    already contain a successful date; the next completed backup writes schema v2.
+    """
     status_file = Path(BASE_DIR) / "backups" / "backup_status.json"
     state = {}
     try:
@@ -95,9 +100,7 @@ def _backup_status_for_template(upload_folder):
     except Exception:
         state = {}
 
-    current_target = str(upload_folder or "")
     success_at = str(state.get("last_success_at") or "")
-    success_target = str(state.get("last_success_target") or "")
     date_text = "--"
     if success_at:
         try:
@@ -105,17 +108,29 @@ def _backup_status_for_template(upload_folder):
         except Exception:
             pass
 
+    try:
+        schema_version = int(state.get("schema_version") or 0)
+    except (TypeError, ValueError):
+        schema_version = 0
     last_result = str(state.get("last_result") or "")
-    target_matches = bool(success_target) and os.path.normpath(success_target) == os.path.normpath(current_target)
-    ok = last_result == "success" and target_matches
-    if last_result == "failed":
+
+    # v25 rule: the date is the last successful snapshot date. It is green normally,
+    # red only after a completed backup explicitly failed, and green again on success.
+    if schema_version >= 2 and last_result == "failed":
+        ok = False
         detail = str(state.get("last_error") or "最近一次备份失败")
-    elif success_at and not target_matches:
-        detail = "当前存储路径尚未完成一次成功备份"
-    elif ok:
-        detail = "最近一次数据库+代码备份已成功写入当前存储路径"
+    elif success_at:
+        ok = True
+        if schema_version < 2:
+            detail = "最近一次成功备份日期；后续备份若失败将变红"
+        elif last_result == "success":
+            detail = "最近一次数据库+代码备份成功"
+        else:
+            detail = "最近一次成功备份日期"
     else:
-        detail = "尚未确认有备份成功写入当前存储路径"
+        ok = False
+        detail = "尚无成功备份记录"
+
     return {
         "date": date_text,
         "ok": ok,

@@ -27,6 +27,7 @@ INIT_DB_SCRIPT = f"{APP_ROOT}/init_db.py"
 VENV_PYTHON = f"{APP_ROOT}/venv/bin/python"
 BACKUP_RETENTION_DAYS = 90
 BACKUP_STATUS_FILE = f"{BACKUP_DIR}/backup_status.json"
+BACKUP_STATUS_SCHEMA = 2
 
 
 def log_msg(msg, level="INFO"):
@@ -47,22 +48,45 @@ def _read_backup_status():
         return {}
 
 
-def write_backup_status(success, upload_folder, error=""):
-    """Persist latest attempt without erasing the previous successful timestamp on failure."""
+def _persist_backup_state(state):
+    Path(BACKUP_DIR).mkdir(parents=True, exist_ok=True)
+    tmp = Path(f"{BACKUP_STATUS_FILE}.tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(BACKUP_STATUS_FILE)
+
+
+def mark_backup_attempt(upload_folder):
+    """Record that a run started without changing the last success/failure colour.
+
+    The header turns red only after an actual failed backup. Merely starting the
+    22:00 job must not temporarily turn a previously successful date red.
+    """
     try:
-        Path(BACKUP_DIR).mkdir(parents=True, exist_ok=True)
+        state = _read_backup_status()
+        state["schema_version"] = BACKUP_STATUS_SCHEMA
+        state["last_attempt_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        state["configured_target"] = str(upload_folder or "")
+        state["attempt_state"] = "running"
+        _persist_backup_state(state)
+    except Exception as exc:
+        log_msg(f"Backup attempt status write failed: {exc}", "ERR")
+
+
+def write_backup_status(success, upload_folder, error=""):
+    """Persist the completed result while preserving the last successful date on failure."""
+    try:
         state = _read_backup_status()
         now = datetime.now().astimezone().isoformat(timespec="seconds")
+        state["schema_version"] = BACKUP_STATUS_SCHEMA
         state["last_attempt_at"] = now
         state["last_result"] = "success" if success else "failed"
         state["configured_target"] = str(upload_folder or "")
+        state["attempt_state"] = "finished"
         state["last_error"] = "" if success else str(error or "backup failed")[:1000]
         if success:
             state["last_success_at"] = now
             state["last_success_target"] = str(upload_folder or "")
-        tmp = Path(f"{BACKUP_STATUS_FILE}.tmp")
-        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(BACKUP_STATUS_FILE)
+        _persist_backup_state(state)
     except Exception as exc:
         # Status reporting must never make a valid backup fail.
         log_msg(f"Backup status write failed: {exc}", "ERR")
@@ -373,9 +397,9 @@ def main():
 
     log_msg("Starting database backup")
     log_msg(f"Config loaded: db={db_name}, upload_folder={upload_folder}")
-    # Mark the newest attempt unconfirmed first. If the process is interrupted,
-    # the web header stays red and the previous successful date is preserved.
-    write_backup_status(False, upload_folder, "backup in progress or not yet confirmed")
+    # Record that the scheduled/manual run started, but keep the previous colour.
+    # The header becomes red only when this run has an explicit failure result.
+    mark_backup_attempt(upload_folder)
 
     if not backup_database(db_name, db_user, db_pass):
         write_backup_status(False, upload_folder, "database backup failed")
