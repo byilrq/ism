@@ -27,6 +27,7 @@ BACKUP_DIR="${APP_ROOT}/backups"
 STATE_FILE="/root/.ism_install.conf"
 RCLONE_CONFIG_DIR="$HOME/.config/rclone"
 RCLONE_CONFIG_FILE="$RCLONE_CONFIG_DIR/rclone.conf"
+RCLONE_HEALTH_STATE_DIR="/var/lib/rclone-mount-health"
 
 DAV_MOUNT="/mnt/webdav_mount"
 DAV_REMOTE_ROOT="ism_images"
@@ -914,6 +915,8 @@ PY_MERGE
 
         mv -f "$tmp_config" "$RCLONE_CONFIG_FILE"
         chmod 600 "$RCLONE_CONFIG_FILE"
+        mkdir -p "$RCLONE_HEALTH_STATE_DIR"
+        rm -f "$RCLONE_HEALTH_STATE_DIR/${config_name}.auth_error"
         tmp_config=""
         rm -f "$tmp_section" "$tmp_error"
         tmp_section=""
@@ -1013,11 +1016,26 @@ mount_rclone() {
     fi
 
     info "先验证远端 ${config_name}: 是否可访问"
-    if ! timeout -k 2s 15s rclone lsd "${config_name}:" --config "$RCLONE_CONFIG_FILE" --max-depth 1 >/dev/null 2>&1; then
-        err "远端访问失败。为避免生成假挂载，本次不启动 FUSE 挂载。"
-        echo "请先检查网络、Pcloud token 或执行菜单 3.2 重新授权。"
+    local verify_error verify_rc auth_error_file
+    auth_error_file="${RCLONE_HEALTH_STATE_DIR}/${config_name}.auth_error"
+    mkdir -p "$RCLONE_HEALTH_STATE_DIR"
+    verify_error="$(mktemp /tmp/rclone-mount-verify.XXXXXX)"
+    if timeout -k 2s 15s rclone lsd "${config_name}:" --config "$RCLONE_CONFIG_FILE" --max-depth 1 >/dev/null 2>"$verify_error"; then
+        rm -f "$auth_error_file"
+    else
+        verify_rc=$?
+        if grep -qiE 'revoked|result[^0-9]*2095|2095|invalid[^[:alnum:]]*(access[_ -]?token|token)|access[_ -]?token[^[:alnum:]]*(invalid|revoked)|invalid[^[:alnum:]]*client|client[^[:alnum:]]*invalid|client_secret|unauthori[sz]ed|invalid_grant|oauth[^[:alnum:]]*(invalid|denied)' "$verify_error"; then
+            date -Is > "$auth_error_file"
+            err "Pcloud 授权已失效/被撤销，本次不会启动或反复重启挂载。"
+            echo "请执行菜单 3.2 重新授权，成功后再执行菜单 3.3 启用/修复挂载。"
+        else
+            err "Pcloud 远端当前不可达（rc=${verify_rc}），更可能是网络或服务异常。"
+            echo "为避免生成假挂载，本次不启动 FUSE；网络恢复后可重新执行菜单 3.3。"
+        fi
+        rm -f "$verify_error"
         return 1
     fi
+    rm -f "$verify_error"
 
     mkdir -p "$mount_path"
     write_rclone_mount_service "$config_name" "$mount_path"
@@ -1100,6 +1118,8 @@ write_rclone_mount_service() {
 Description=Rclone Mount ${config_name}
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -1118,8 +1138,8 @@ ExecStart=/usr/bin/rclone mount ${config_name}: ${mount_path} \\
   --log-level INFO \\
   --log-file ${log_file}
 ExecStop=-${fuse_unmount} ${fuse_unmount_args} ${mount_path}
-Restart=always
-RestartSec=5
+Restart=on-failure
+RestartSec=15
 TimeoutStopSec=20
 KillMode=mixed
 
@@ -1139,6 +1159,9 @@ write_rclone_health_monitor() {
     local health_service="/etc/systemd/system/rclone-mount-health-${config_name}.service"
     local health_timer="/etc/systemd/system/rclone-mount-health-${config_name}.timer"
 
+    mkdir -p "$RCLONE_HEALTH_STATE_DIR"
+    chmod 700 "$RCLONE_HEALTH_STATE_DIR" 2>/dev/null || true
+
     cat > "$health_script" <<EOF_HEALTH
 #!/usr/bin/env bash
 set -u
@@ -1148,20 +1171,65 @@ MOUNT_PATH='${mount_path}'
 REMOTE='${config_name}:'
 RCLONE_CONFIG='${RCLONE_CONFIG_FILE}'
 ISM_CONFIG='${APP_ROOT}/config.yaml'
+STATE_DIR='${RCLONE_HEALTH_STATE_DIR}'
+AUTH_ERROR_FILE='${RCLONE_HEALTH_STATE_DIR}/${config_name}.auth_error'
 TAG='rclone-mount-health-${config_name}'
 
 log_msg() { logger -t "\$TAG" -- "\$*"; }
 
+mkdir -p "\$STATE_DIR"
+chmod 700 "\$STATE_DIR" 2>/dev/null || true
+
 probe_path="\$MOUNT_PATH"
 if [ -r "\$ISM_CONFIG" ]; then
-    configured_path="\$(sed -n 's/^[[:space:]]*upload_folder:[[:space:]]*//p' "\$ISM_CONFIG" | head -n 1 | sed -e 's/^["'\'' ]*//' -e 's/["'\'' ]*$//' || true)"
+    configured_path="\$(sed -n 's/^[[:space:]]*upload_folder:[[:space:]]*//p' "\$ISM_CONFIG" | head -n 1 | sed -e 's/^["'\'' ]*//' -e 's/["'\'' ]*\$//' || true)"
     case "\$configured_path" in
         "\$MOUNT_PATH"|"\$MOUNT_PATH"/*) probe_path="\$configured_path" ;;
     esac
 fi
 
+is_auth_error() {
+    printf '%s' "\$1" | grep -qiE \
+        'revoked|result[^0-9]*2095|2095|invalid[^[:alnum:]]*(access[_ -]?token|token)|access[_ -]?token[^[:alnum:]]*(invalid|revoked)|invalid[^[:alnum:]]*client|client[^[:alnum:]]*invalid|client_secret|unauthori[sz]ed|invalid_grant|oauth[^[:alnum:]]*(invalid|denied)'
+}
+
+mark_auth_error() {
+    printf '%s\n' "\$(date -Is)" > "\$AUTH_ERROR_FILE"
+    log_msg "[AUTH ERROR] Pcloud authorization invalid/revoked; manual re-authorization required"
+}
+
+clear_auth_error() {
+    rm -f "\$AUTH_ERROR_FILE"
+}
+
+remote_check() {
+    local err_file err_text rc
+    err_file="\$(mktemp /tmp/rclone-health-remote.XXXXXX)" || return 1
+    if timeout -k 2s 15s /usr/bin/rclone lsd "\$REMOTE" --config "\$RCLONE_CONFIG" --max-depth 1 >/dev/null 2>"\$err_file"; then
+        clear_auth_error
+        rm -f "\$err_file"
+        return 0
+    fi
+    rc=\$?
+    err_text="\$(cat "\$err_file" 2>/dev/null || true)"
+    rm -f "\$err_file"
+    if is_auth_error "\$err_text"; then
+        mark_auth_error
+        return 2
+    fi
+    return "\$rc"
+}
+
+stop_bad_mount_for_auth() {
+    if systemctl is-active --quiet "\$SERVICE"; then
+        log_msg "authorization failed; stopping stale mount service \$SERVICE"
+        systemctl stop "\$SERVICE" >/dev/null 2>&1 || true
+    fi
+}
+
 restart_mount() {
     log_msg "restarting \$SERVICE (probe=\$probe_path)"
+    systemctl reset-failed "\$SERVICE" >/dev/null 2>&1 || true
     systemctl restart "\$SERVICE" || return 1
     sleep 5
     mountpoint -q "\$MOUNT_PATH" || return 1
@@ -1169,8 +1237,12 @@ restart_mount() {
 }
 
 if ! systemctl is-active --quiet "\$SERVICE"; then
-    if timeout -k 2s 15s /usr/bin/rclone lsd "\$REMOTE" --config "\$RCLONE_CONFIG" --max-depth 1 >/dev/null 2>&1; then
+    remote_check
+    remote_rc=\$?
+    if [ "\$remote_rc" -eq 0 ]; then
         restart_mount && log_msg "service recovered" || log_msg "service recovery failed"
+    elif [ "\$remote_rc" -eq 2 ]; then
+        log_msg "service remains stopped because Pcloud authorization requires manual renewal"
     else
         log_msg "remote unavailable; skip restart until backend recovers"
     fi
@@ -1178,8 +1250,13 @@ if ! systemctl is-active --quiet "\$SERVICE"; then
 fi
 
 if ! mountpoint -q "\$MOUNT_PATH"; then
-    if timeout -k 2s 15s /usr/bin/rclone lsd "\$REMOTE" --config "\$RCLONE_CONFIG" --max-depth 1 >/dev/null 2>&1; then
+    remote_check
+    remote_rc=\$?
+    if [ "\$remote_rc" -eq 0 ]; then
         restart_mount && log_msg "missing mount recovered" || log_msg "missing mount recovery failed"
+    elif [ "\$remote_rc" -eq 2 ]; then
+        stop_bad_mount_for_auth
+        log_msg "mount not restarted because Pcloud authorization requires manual renewal"
     else
         log_msg "mount missing and remote unavailable"
     fi
@@ -1198,11 +1275,17 @@ if printf '%s' "\$probe_err" | grep -qiE 'No such file|not found'; then
     exit 0
 fi
 
-# Only recycle the FUSE mount when the backend itself is reachable. This avoids
-# a restart storm during a real Internet/Pcloud outage.
-if timeout -k 2s 15s /usr/bin/rclone lsd "\$REMOTE" --config "\$RCLONE_CONFIG" --max-depth 1 >/dev/null 2>&1; then
+# Only recycle the FUSE mount when the backend itself is reachable. Authentication
+# failures are kept separate from network/backend outages so a revoked token does
+# not cause a restart loop.
+remote_check
+remote_rc=\$?
+if [ "\$remote_rc" -eq 0 ]; then
     log_msg "mount unhealthy (rc=\$probe_rc, error=\$probe_err); backend reachable"
     restart_mount && log_msg "stale/EIO mount recovered" || log_msg "stale/EIO mount recovery failed"
+elif [ "\$remote_rc" -eq 2 ]; then
+    stop_bad_mount_for_auth
+    log_msg "mount unhealthy and Pcloud authorization invalid; waiting for manual re-authorization"
 else
     log_msg "mount unhealthy but backend unavailable; waiting for backend recovery"
 fi
@@ -1237,7 +1320,7 @@ WantedBy=timers.target
 EOF_HEALTH_TIMER
 
     chmod 644 "$health_service" "$health_timer"
-    ok "已创建 Rclone 挂载健康监控（每 1 分钟）"
+    ok "已创建 Rclone 挂载健康监控（每 1 分钟，区分授权故障与网络/EIO）"
 }
 
 show_rclone_status() {
@@ -1245,12 +1328,37 @@ show_rclone_status() {
     local mount_path="/mnt/rclone"
     local service_name="rclone-mount-${config_name}.service"
     local timer_name="rclone-mount-health-${config_name}.timer"
+    local auth_error_file="${RCLONE_HEALTH_STATE_DIR}/${config_name}.auth_error"
+    local probe_path remote_error remote_rc
 
-    local probe_path
     probe_path="$(rclone_probe_path "$mount_path")"
     echo "Rclone 服务状态：$(systemctl is-active "$service_name" 2>/dev/null || true)"
     echo "健康监控状态：$(systemctl is-active "$timer_name" 2>/dev/null || true)"
     echo "实际检测目录：$probe_path"
+
+    mkdir -p "$RCLONE_HEALTH_STATE_DIR"
+    remote_error="$(mktemp /tmp/rclone-status-remote.XXXXXX)"
+    if timeout -k 2s 15s rclone lsd "${config_name}:" --config "$RCLONE_CONFIG_FILE" --max-depth 1 >/dev/null 2>"$remote_error"; then
+        rm -f "$auth_error_file"
+        ok "Pcloud 远端验证正常"
+    else
+        remote_rc=$?
+        if grep -qiE 'revoked|result[^0-9]*2095|2095|invalid[^[:alnum:]]*(access[_ -]?token|token)|access[_ -]?token[^[:alnum:]]*(invalid|revoked)|invalid[^[:alnum:]]*client|client[^[:alnum:]]*invalid|client_secret|unauthori[sz]ed|invalid_grant|oauth[^[:alnum:]]*(invalid|denied)' "$remote_error"; then
+            date -Is > "$auth_error_file"
+            err "Pcloud 授权异常：Token / API 授权已失效，需要重新执行授权配置"
+        else
+            warn "Pcloud 远端暂不可达（更可能是网络或服务异常，rc=${remote_rc}）"
+        fi
+    fi
+    rm -f "$remote_error"
+
+    if [ -f "$auth_error_file" ]; then
+        echo "授权状态：异常（需要人工重新授权）"
+        echo "最近检测：$(head -n 1 "$auth_error_file" 2>/dev/null || true)"
+    else
+        echo "授权状态：未检测到授权异常"
+    fi
+
     if mountpoint -q "$mount_path" 2>/dev/null; then
         echo "挂载点：$mount_path（已挂载）"
         if rclone_mount_probe "$mount_path" "$probe_path"; then
@@ -1375,6 +1483,7 @@ uninstall_rclone() {
           /etc/systemd/system/rclone-mount-health-*.service \
           /etc/systemd/system/rclone-mount-*.service \
           /usr/local/sbin/rclone-mount-health-*.sh
+    rm -rf "$RCLONE_HEALTH_STATE_DIR"
     systemctl daemon-reload
 
     export DEBIAN_FRONTEND=noninteractive
