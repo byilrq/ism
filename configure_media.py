@@ -9,6 +9,7 @@ import argparse
 from hashlib import sha256
 import os
 import pwd
+import stat
 import re
 import shutil
 import subprocess
@@ -22,8 +23,13 @@ END = '# END ISM IMAGE PERFORMANCE v1'
 SUBDIRS = ('assets', 'accessories', 'asset_locations')
 
 
+def normalized_absolute_path(path):
+    """Return an absolute lexical path without touching a possibly broken FUSE mount."""
+    return Path(os.path.abspath(os.path.expanduser(str(path))))
+
+
 def quoted_path(path):
-    value = str(Path(path).resolve())
+    value = str(normalized_absolute_path(path))
     if any(char in value for char in ('"', '\\', '$', '\n', '\r', ';', '{', '}')):
         raise ValueError('Unsupported Nginx path characters')
     return '"' + value.rstrip('/') + '/"'
@@ -43,7 +49,7 @@ def patch_site(text, app_root, upload_root, max_bytes, version=(1, 26, 0),
     # flags, including when an inaccessible mount requires Flask fallback.
     text = re.sub(r'(?m)^\s*proxy_set_header\s+X-ISM-Accel(?:-Root)?\s+[^;]*;[^\n]*\n?', '\n', text)
     flag = '1' if media_enabled else '0'
-    root_hash = sha256(str(Path(upload_root).resolve()).encode()).hexdigest()
+    root_hash = sha256(str(normalized_absolute_path(upload_root)).encode()).hexdigest()
     text = re.sub(r'(proxy_pass\s+http://127\.0\.0\.1:\d+\s*;)',
                   r'\1\n        proxy_set_header X-ISM-Accel ' + flag + '; # ISM managed\n        proxy_set_header X-ISM-Accel-Root ' + root_hash + '; # ISM managed', text)
     settings = {
@@ -121,6 +127,22 @@ def worker_can(user, path, mode):
     return result.returncode == 0
 
 
+def storage_root_healthy(path):
+    """Force a real directory read so stale FUSE mounts returning EIO are detected."""
+    try:
+        st = os.stat(path)
+        if not stat.S_ISDIR(st.st_mode):
+            return False, 'not a directory'
+        # os.scandir() forces the filesystem to answer a directory read.
+        # Merely checking mountpoint/existence can incorrectly pass on a stale
+        # rclone FUSE mount that is already returning EIO below the mountpoint.
+        with os.scandir(path) as entries:
+            next(entries, None)
+        return True, ''
+    except OSError as exc:
+        return False, f'{exc.__class__.__name__}: {exc}'
+
+
 def grant_tree(user, directory):
     """Grant only traversal on parents; never chmod 755 the whole /root."""
     path = Path(directory).resolve()
@@ -167,7 +189,9 @@ def main():
     configured_uploads = Path(config.get('upload_folder', root / 'app/uploads'))
     if not configured_uploads.is_absolute():
         raise SystemExit('config.yaml upload_folder must be an absolute path')
-    uploads = configured_uploads.resolve()
+    # Do not call Path.resolve() here: resolving a stale FUSE/rclone mount can
+    # itself raise EIO before we have a chance to fall back cleanly.
+    uploads = normalized_absolute_path(configured_uploads)
     limit = int(os.environ.get('MAX_CONTENT_LENGTH') or config.get('max_content_length', 20 * 1024 * 1024))
     nginx_info = subprocess.run(['nginx', '-V'], capture_output=True, text=True, check=True)
     info = nginx_info.stdout + nginx_info.stderr
@@ -183,8 +207,24 @@ def main():
         pwd.getpwnam(user)
         static_path = root / 'app/static'
         static_path.mkdir(parents=True, exist_ok=True)
-        for name in SUBDIRS:
-            (uploads / name).mkdir(parents=True, exist_ok=True)
+
+        # A FUSE/rclone mount may still be reported as mounted while all real
+        # directory operations below it return EIO.  Never mkdir/chmod such a
+        # path during an ISM restart.  Disable direct media acceleration and
+        # let the web app expose the storage fault through its health indicator.
+        storage_ok, storage_error = storage_root_healthy(uploads)
+        if storage_ok:
+            try:
+                for name in SUBDIRS:
+                    (uploads / name).mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                storage_ok = False
+                storage_error = f'{exc.__class__.__name__}: {exc}'
+
+        if not storage_ok:
+            media_ok = False
+            print(f'WARNING: upload_folder unavailable; skipped image directory/Nginx direct media setup: '
+                  f'{uploads} ({storage_error})')
 
         if shutil.which('setfacl'):
             try:
@@ -192,13 +232,14 @@ def main():
             except (OSError, subprocess.CalledProcessError) as exc:
                 static_ok = False
                 print('WARNING: static ACL optimization unavailable; /static stays on Flask fallback:', exc)
-            try:
-                for name in SUBDIRS:
-                    if not grant_tree(user, uploads / name):
-                        media_ok = False
-            except (OSError, subprocess.CalledProcessError) as exc:
-                media_ok = False
-                print('WARNING: image ACL optimization unavailable; /uploads stays on Flask fallback:', exc)
+            if storage_ok:
+                try:
+                    for name in SUBDIRS:
+                        if not grant_tree(user, uploads / name):
+                            media_ok = False
+                except (OSError, subprocess.CalledProcessError) as exc:
+                    media_ok = False
+                    print('WARNING: image ACL optimization unavailable; /uploads stays on Flask fallback:', exc)
         else:
             # ACL is an optional performance enhancement, never a runtime
             # dependency.  A manually upgraded server may not have the `acl`
@@ -206,12 +247,13 @@ def main():
             # otherwise remove the direct aliases and let Flask serve them.
             probe = static_path / 'login.webp'
             static_ok = worker_can(user, static_path, '-x') and (not probe.exists() or worker_can(user, probe, '-r'))
-            media_ok = True
-            for name in SUBDIRS:
-                path = uploads / name
-                if not (worker_can(user, path, '-x') and worker_can(user, path, '-r')):
-                    media_ok = False
-                    break
+            if storage_ok:
+                media_ok = True
+                for name in SUBDIRS:
+                    path = uploads / name
+                    if not (worker_can(user, path, '-x') and worker_can(user, path, '-r')):
+                        media_ok = False
+                        break
             print('WARNING: setfacl not installed; ACL optimization skipped. '
                   f'static_direct={static_ok}, image_direct={media_ok}. Flask fallback remains available.')
     patched = patch_site(original, root, uploads, limit, version,

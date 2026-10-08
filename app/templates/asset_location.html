@@ -151,7 +151,7 @@ function confirmLocationSave(){ return confirm('确认保存货架位置和图�
 </head>
 <body class="ism-app">
 <div class="wrap">
-    <div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;"><span style="display:inline-flex;align-items:center;gap:8px;font-size:18px;font-weight:800;color:#263646;"><img src="{{ url_for('static', filename='login.webp', v='20260927-login-v2') }}" alt="资产管理系统" width="34" height="34" style="width:34px;height:34px;border-radius:50%;object-fit:cover;">资产管理系统</span><div class="storage-info-row"><span class="storage-path"><strong>存储路径：</strong>{{ config.get('UPLOAD_FOLDER', '') }}</span><span class="backup-stamp{% if not backup_status.ok %} backup-failed{% endif %}" title="{{ backup_status.title }}"><strong>备份：</strong>{{ backup_status.date }}</span></div></div></div>
+    <div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;"><span style="display:inline-flex;align-items:center;gap:8px;font-size:18px;font-weight:800;color:#263646;"><img src="{{ url_for('static', filename='login.webp', v='20260927-login-v2') }}" alt="资产管理系统" width="34" height="34" style="width:34px;height:34px;border-radius:50%;object-fit:cover;">资产管理系统</span><div class="storage-info-row"><span class="storage-path {{ 'storage-ok' if storage_status.ok else 'storage-failed' }}" title="{{ storage_status.title }}"><strong>存储路径：</strong>{{ config.get('UPLOAD_FOLDER', '') }}</span><span class="backup-stamp{% if not backup_status.ok %} backup-failed{% endif %}" title="{{ backup_status.title }}"><strong>备份：</strong>{{ backup_status.date }}</span></div></div></div>
 
     <div class="card">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;">

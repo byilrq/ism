@@ -3,6 +3,8 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 import os
 import json
+import stat
+import time
 from datetime import datetime
 from pathlib import Path
 import yaml
@@ -35,6 +37,51 @@ def _load_cfg():
     cfg["BASE_DIR"] = BASE_DIR
     return cfg
 
+
+
+_STORAGE_HEALTH_CACHE = {
+    "target": "",
+    "checked_at": 0.0,
+    "value": {"ok": True, "title": "存储路径正常"},
+}
+_STORAGE_HEALTH_TTL = 12.0
+
+def _storage_status_for_template(upload_folder):
+    """Lightweight cached storage probe used only for the header indicator.
+
+    A real directory stat + directory scan is intentional: mountpoint(1) alone can
+    still report a stale FUSE/rclone mount as mounted while children return EIO.
+    The short cache avoids touching remote storage on every HTTP request.
+    """
+    target = os.path.abspath(str(upload_folder or "").strip()) if upload_folder else ""
+    now = time.monotonic()
+    cached_target = _STORAGE_HEALTH_CACHE.get("target")
+    cached_at = float(_STORAGE_HEALTH_CACHE.get("checked_at") or 0.0)
+    if target == cached_target and now - cached_at < _STORAGE_HEALTH_TTL:
+        return dict(_STORAGE_HEALTH_CACHE.get("value") or {"ok": True, "title": "存储路径正常"})
+
+    ok = True
+    title = "存储路径正常"
+    try:
+        if not target:
+            raise OSError("未配置存储路径")
+        st = os.stat(target)
+        if not stat.S_ISDIR(st.st_mode):
+            raise OSError("配置的存储路径不是目录")
+        # scandir forces a real directory read. This catches stale FUSE mounts that
+        # still appear in findmnt/mountpoint but return EIO for child paths.
+        with os.scandir(target) as it:
+            next(it, None)
+        if not os.access(target, os.R_OK | os.W_OK):
+            raise PermissionError("存储路径不可读写")
+    except (OSError, ValueError) as exc:
+        ok = False
+        err_text = str(exc).strip() or exc.__class__.__name__
+        title = f"存储路径异常：{err_text}"
+
+    value = {"ok": ok, "title": title}
+    _STORAGE_HEALTH_CACHE.update(target=target, checked_at=now, value=value)
+    return dict(value)
 
 def _backup_status_for_template(upload_folder):
     """Read only the local status file; never touch a possibly slow remote mount during page render."""
@@ -115,8 +162,10 @@ def create_app(test_config=None):
             skin_version = str(int(skin_file.stat().st_mtime_ns))
         except OSError:
             skin_version = "1"
+        upload_folder = app.config.get("UPLOAD_FOLDER", "")
         return {
-            "backup_status": _backup_status_for_template(app.config.get("UPLOAD_FOLDER", "")),
+            "backup_status": _backup_status_for_template(upload_folder),
+            "storage_status": _storage_status_for_template(upload_folder),
             "skin_version": skin_version,
         }
 

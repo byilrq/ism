@@ -394,3 +394,16 @@ body.ism-app:not(.ism-scan) .upload-actions .upload-camera-btn:disabled {
     height: 21px;
   }
 }
+
+
+/* Storage path health: green when the configured path is readable, red on EIO/missing/unreadable. */
+body.ism-app:not(.ism-scan) .topbar-path.storage-ok,
+body.ism-app:not(.ism-scan) .storage-path.storage-ok {
+  color: #2f8a5f !important;
+  font-weight: 650;
+}
+body.ism-app:not(.ism-scan) .topbar-path.storage-failed,
+body.ism-app:not(.ism-scan) .storage-path.storage-failed {
+  color: #c62828 !important;
+  font-weight: 750;
+}

@@ -328,7 +328,7 @@ function confirmDeleteSelected(){
     <div class="card">
         <div class="topbar">
             <div class="topbar-brand"><img src="{{ url_for('static', filename='login.webp', v='20260927-login-v2') }}" alt="资产管理系统" width="38" height="38"><span>资产管理系统</span></div>
-            <div class="topbar-storage"><div class="topbar-path"><strong>存储路径：</strong>{{ config.get('UPLOAD_FOLDER', '') }}</div><div class="backup-stamp{% if not backup_status.ok %} backup-failed{% endif %}" title="{{ backup_status.title }}"><strong>备份：</strong>{{ backup_status.date }}</div></div>
+            <div class="topbar-storage"><div class="topbar-path {{ 'storage-ok' if storage_status.ok else 'storage-failed' }}" title="{{ storage_status.title }}"><strong>存储路径：</strong>{{ config.get('UPLOAD_FOLDER', '') }}</div><div class="backup-stamp{% if not backup_status.ok %} backup-failed{% endif %}" title="{{ backup_status.title }}"><strong>备份：</strong>{{ backup_status.date }}</div></div>
             <div class="topbar-actions">{% if can_manage %}<a href="{{ url_for('device_logs') }}" title="设备修改日志" class="log-link" aria-label="设备修改日志">📋</a>{% endif %}{% if current_user.is_authenticated %}<a href="/logout" title="退出登录" class="power-link"><button type="button" class="btn-power" aria-label="退出登录"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8"></path><path d="M7.05 5.05a9 9 0 1 0 9.9 0"></path></svg></button></a>{% endif %}</div>
         </div>
     </div>
