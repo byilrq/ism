@@ -214,7 +214,7 @@
                 const percent = Math.min(100, Math.floor(event.loaded * 100 / event.total));
                 notice(form, percent < 100
                     ? '\u539f\u56fe\u4e0a\u4f20 ' + percent + '%\uff08' + mb(event.loaded) + ' / ' + mb(event.total) + '\uff09'
-                    : '\u5df2\u4f20\u8f93\u5b8c\u6210\uff0c\u6b63\u5728\u7b49\u5f85\u670d\u52a1\u5668\u786e\u8ba4\u4fdd\u5b58\uff0c\u8bf7\u52ff\u91cd\u590d\u63d0\u4ea4\u2026', false);
+                    : '\u5df2\u4e0a\u4f20\u81f3\u670d\u52a1\u5668\uff0c\u6b63\u5728\u8fdb\u5165\u540e\u53f0\u5b58\u50a8\u961f\u5217\u2026', false);
             };
             const uncertain = function () {
                 setBusy(form, false);
@@ -229,7 +229,10 @@
                 if (xhr.status >= 200 && xhr.status < 300 && data && data.ok && data.redirect_url) {
                     const target = new URL(data.redirect_url, window.location.href);
                     if (target.origin !== window.location.origin) { uncertain(); return; }
-                    notice(form, '\u4fdd\u5b58\u6210\u529f\uff0c\u6b63\u5728\u5237\u65b0\u9875\u9762\u2026', false);
+                    // Local spool + DB task are durable at this point. Final cloud/mount
+                    // synchronization is handled by the background worker. Image uploads
+                    // intentionally finish without a positive toast.
+                    if (files.length) target.searchParams.delete('saved');
                     window.location.assign(target.href);
                     return;
                 }
@@ -242,7 +245,7 @@
                     try {
                         const legacyTarget = new URL(xhr.responseURL, window.location.href);
                         if (legacyTarget.origin === window.location.origin && legacyTarget.searchParams.get('saved') === '1') {
-                            notice(form, '\u4fdd\u5b58\u6210\u529f\uff0c\u6b63\u5728\u5237\u65b0\u9875\u9762\u2026', false);
+                            if (files.length) legacyTarget.searchParams.delete('saved');
                             window.location.assign(legacyTarget.href);
                             return;
                         }

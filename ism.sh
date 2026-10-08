@@ -13,6 +13,10 @@ BACKUP_PYTHON="${VENV_DIR}/bin/python"
 
 SERVICE_NAME="ism"
 SYSTEMD_SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+IMAGE_WORKER_SERVICE_NAME="ism-image-worker"
+IMAGE_WORKER_SERVICE_FILE="/etc/systemd/system/${IMAGE_WORKER_SERVICE_NAME}.service"
+IMAGE_WORKER_SCRIPT="${APP_ROOT}/image_worker.py"
+IMAGE_SPOOL_DIR="${APP_ROOT}/upload_spool"
 NGINX_SITE_FILE="/etc/nginx/sites-available/${SERVICE_NAME}.conf"
 NGINX_SITE_LINK="/etc/nginx/sites-enabled/${SERVICE_NAME}.conf"
 STATE_FILE="/root/.ism_install.conf"
@@ -321,6 +325,46 @@ PY
     ok "ism systemd 已设置依赖：${dep_unit}"
 }
 
+write_image_worker_systemd() {
+    if [ ! -f "$IMAGE_WORKER_SCRIPT" ]; then
+        warn "未找到图片后台同步程序：$IMAGE_WORKER_SCRIPT"
+        return 0
+    fi
+    mkdir -p "$IMAGE_SPOOL_DIR"
+    chmod 700 "$IMAGE_SPOOL_DIR" 2>/dev/null || true
+    cat > "$IMAGE_WORKER_SERVICE_FILE" <<EOF_IMAGE_WORKER
+[Unit]
+Description=ISM Image Background Sync Worker
+After=network-online.target mariadb.service ${SERVICE_NAME}.service
+Wants=network-online.target
+PartOf=${SERVICE_NAME}.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=${APP_ROOT}
+Environment=PYTHONUNBUFFERED=1
+ExecStart=${VENV_DIR}/bin/python ${IMAGE_WORKER_SCRIPT}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF_IMAGE_WORKER
+    systemctl daemon-reload
+    systemctl enable "$IMAGE_WORKER_SERVICE_NAME" >/dev/null 2>&1 || true
+    if systemctl restart "$IMAGE_WORKER_SERVICE_NAME"; then
+        if systemctl is-active --quiet "$IMAGE_WORKER_SERVICE_NAME"; then
+            ok "图片后台同步服务已启动：${IMAGE_WORKER_SERVICE_NAME}"
+        else
+            warn "图片后台同步服务暂未进入 active，请检查：journalctl -u ${IMAGE_WORKER_SERVICE_NAME} -n 80 --no-pager"
+        fi
+    else
+        warn "图片后台同步服务启动失败，但不阻止 ISM 主服务运行。请检查：journalctl -u ${IMAGE_WORKER_SERVICE_NAME} -n 80 --no-pager"
+    fi
+}
+
 write_systemd() {
     info "写入 systemd 服务"
     cat > "$SYSTEMD_SERVICE_FILE" <<EOF_SYSTEMD
@@ -353,6 +397,7 @@ EOF_SYSTEMD
     else
         warn "systemd 服务已启动，但暂未检测到 ${INTERNAL_PORT} 端口监听，请执行：journalctl -u ${SERVICE_NAME} -n 80 --no-pager"
     fi
+    write_image_worker_systemd
 }
 
 reset_asset_systemd_to_plain() {
@@ -371,8 +416,8 @@ download_files() {
 
     local local_source
     local_source="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-    if [ ! -f "${local_source}/app/image_uploads.py" ] || [ ! -f "${local_source}/run.py" ]; then
-        err "当前目录不是完整 ISM 安装包：缺少 app/image_uploads.py 或 run.py"
+    if [ ! -f "${local_source}/app/image_uploads.py" ] || [ ! -f "${local_source}/run.py" ] || [ ! -f "${local_source}/image_worker.py" ]; then
+        err "当前目录不是完整 ISM 安装包：缺少 app/image_uploads.py、run.py 或 image_worker.py"
         return 1
     fi
 
@@ -384,6 +429,7 @@ download_files() {
     cp -f "${local_source}/ism_backup.py" "$TMP_DIR/ism_backup.py"
     cp -f "${local_source}/init_db.py" "$TMP_DIR/init_db.py"
     cp -f "${local_source}/configure_media.py" "$TMP_DIR/configure_media.py"
+    cp -f "${local_source}/image_worker.py" "$TMP_DIR/image_worker.py"
 
     ok "本地程序文件读取完成"
 }
@@ -407,8 +453,11 @@ deploy_files() {
     chmod +x "$BACKUP_SCRIPT"
     cp -f "$TMP_DIR/init_db.py" "$APP_ROOT/init_db.py"
     cp -f "$TMP_DIR/configure_media.py" "$APP_ROOT/configure_media.py"
+    cp -f "$TMP_DIR/image_worker.py" "$IMAGE_WORKER_SCRIPT"
+    chmod +x "$IMAGE_WORKER_SCRIPT"
 
-    mkdir -p "$ASSET_IMG_DIR" "$ACCESSORY_IMG_DIR"
+    mkdir -p "$ASSET_IMG_DIR" "$ACCESSORY_IMG_DIR" "$IMAGE_SPOOL_DIR"
+    chmod 700 "$IMAGE_SPOOL_DIR" 2>/dev/null || true
     ok "应用文件已部署"
 }
 
@@ -1920,13 +1969,14 @@ restart_service() {
     systemctl enable "$SERVICE_NAME"
     apply_image_delivery --reload
     systemctl restart "$SERVICE_NAME"
+    write_image_worker_systemd
     systemctl status "$SERVICE_NAME" --no-pager || true
 }
 
 uninstall_system() {
     warn "========== 卸载 ISM 系统 =========="
     warn "该操作将："
-    warn "  1. 停止并删除 ism systemd 服务"
+    warn "  1. 停止并删除 ISM 主服务和图片后台同步服务"
     warn "  2. 删除 ism 的 Nginx 站点配置（不会删除 nginx 本身）"
     warn "  3. 删除 /root/ism 程序目录和虚拟环境"
     warn "  4. 删除数据库和用户"
@@ -1940,7 +1990,10 @@ uninstall_system() {
         return 0
     fi
 
-    info "停止 ism 服务"
+    info "停止 ism 服务和图片后台同步服务"
+    systemctl stop "$IMAGE_WORKER_SERVICE_NAME" >/dev/null 2>&1 || true
+    systemctl disable "$IMAGE_WORKER_SERVICE_NAME" >/dev/null 2>&1 || true
+    rm -f "$IMAGE_WORKER_SERVICE_FILE"
     systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
     systemctl disable "$SERVICE_NAME" >/dev/null 2>&1 || true
     rm -f "$SYSTEMD_SERVICE_FILE"

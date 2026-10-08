@@ -3,7 +3,7 @@
 No decoder, resize, recompression or metadata stripping is used. Scope locks
 live in the database so two Gunicorn processes share the same exclusion lock.
 """
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from urllib.parse import quote
@@ -52,6 +52,30 @@ class ImageUploadSubmission(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=_utc_naive_now, index=True)
 
 
+class ImageSyncTask(db.Model):
+    """Durable local-spool -> configured storage synchronization task."""
+    __tablename__ = "ism_image_sync_tasks"
+
+    id = db.Column(db.Integer, primary_key=True)
+    relative_path = db.Column(db.String(500), nullable=False, unique=True, index=True)
+    spool_name = db.Column(db.String(128), nullable=False, unique=True)
+    sha256 = db.Column(db.String(64), nullable=False)
+    size_bytes = db.Column(db.BigInteger, nullable=False)
+    state = db.Column(db.String(20), nullable=False, default="pending", index=True)
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    last_error = db.Column(db.Text, nullable=True)
+    failure_logged = db.Column(db.Boolean, nullable=False, default=False)
+    device_type = db.Column(db.String(20), nullable=False, default="主设备")
+    device_id = db.Column(db.Integer, nullable=True)
+    group_no = db.Column(db.String(128), nullable=True)
+    asset_no = db.Column(db.String(128), nullable=False, default="")
+    asset_name = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=_utc_naive_now, index=True)
+    updated_at = db.Column(db.DateTime, nullable=False, default=_utc_naive_now, index=True)
+    next_retry_at = db.Column(db.DateTime, nullable=True, index=True)
+    synced_at = db.Column(db.DateTime, nullable=True)
+
+
 def _lock_row(model, key_name, key, **initial):
     """Atomic insert-or-lock. Never use a process-local mutex for this."""
     table = model.__table__
@@ -98,7 +122,22 @@ def file_digest(file_storage):
 
 
 def _upload_root():
-    return Path(current_app.config["UPLOAD_FOLDER"]).resolve()
+    # Do not resolve through a possibly stale FUSE mount here.  Validation of
+    # relative paths is lexical; actual I/O is allowed to fail in the worker.
+    return Path(os.path.abspath(str(current_app.config["UPLOAD_FOLDER"])))
+
+
+def _spool_root():
+    root = Path(current_app.config.get("BASE_DIR") or "/root/ism") / "upload_spool"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def spool_path(spool_name):
+    name = str(spool_name or "")
+    if not re.fullmatch(r"[A-Fa-f0-9]{32}\.ready", name):
+        raise ValueError("Invalid spool file")
+    return _spool_root() / name
 
 
 def _validate_image_relative(relative_path):
@@ -117,13 +156,11 @@ def _validate_image_relative(relative_path):
 
 def _path_under(root, relative_path):
     relative_path = _validate_image_relative(relative_path)
-    root = Path(root).resolve()
-    path = (root / relative_path).resolve()
-    try:
-        path.relative_to(root)
-    except ValueError as exc:
-        raise ValueError("Invalid image path") from exc
-    return path
+    root = Path(os.path.abspath(str(root)))
+    # _validate_image_relative permits exactly <known-subdir>/<filename>, so no
+    # filesystem resolve() is needed.  Avoiding resolve is important when the
+    # configured rclone/FUSE tree is temporarily returning EIO.
+    return root / relative_path
 
 
 def _compatible_upload_roots():
@@ -137,8 +174,8 @@ def _compatible_upload_roots():
     """
     primary = _upload_root()
     roots = [primary]
-    app_uploads = (Path(current_app.root_path).resolve() / "uploads").resolve()
-    app_images = (app_uploads / "images").resolve()
+    app_uploads = Path(os.path.abspath(str(Path(current_app.root_path) / "uploads")))
+    app_images = app_uploads / "images"
     if primary == app_uploads:
         roots.append(app_images)
     elif primary == app_images:
@@ -164,30 +201,137 @@ def _existing_image_path(relative_path):
     relative_path = _validate_image_relative(relative_path)
     for root in _compatible_upload_roots():
         path = _path_under(root, relative_path)
-        if path.is_file():
-            return path, root
+        try:
+            if path.is_file():
+                return path, root
+        except OSError:
+            # A stale FUSE mount may still be mounted while all child stats
+            # return EIO.  Pending uploads must remain usable from local spool.
+            continue
     # Return the primary location for consistent missing-file handling.
     root = _upload_root()
     return _path_under(root, relative_path), root
 
 
 def _disk_digest(relative_path, cache):
+    entry = cache.get(relative_path)
+    if isinstance(entry, dict) and entry.get("sha256"):
+        # New uploads persist their content digest in the scope cache before
+        # cloud synchronization, so dedup never needs to wait on rclone.
+        if "stat" not in entry:
+            return entry.get("sha256")
+
+    task = ImageSyncTask.query.filter_by(relative_path=relative_path).order_by(ImageSyncTask.id.desc()).first()
+    if task is not None and task.sha256:
+        cache[relative_path] = {"sha256": task.sha256, "size": int(task.size_bytes or 0)}
+        return task.sha256
+
     path, _root = _existing_image_path(relative_path)
     try:
-        stat = path.stat()
-    except FileNotFoundError:
-        return None
-    signature = [stat.st_size, stat.st_mtime_ns]
-    entry = cache.get(relative_path)
+        stat_result = path.stat()
+    except OSError:
+        # Do not make a new local upload fail merely because historical remote
+        # images cannot currently be read.  New-image dedup remains exact.
+        return entry.get("sha256") if isinstance(entry, dict) else None
+    signature = [stat_result.st_size, stat_result.st_mtime_ns]
     if isinstance(entry, dict) and entry.get("stat") == signature:
         return entry.get("sha256")
     digest = sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(CHUNK_SIZE), b""):
-            digest.update(chunk)
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(CHUNK_SIZE), b""):
+                digest.update(chunk)
+    except OSError:
+        return entry.get("sha256") if isinstance(entry, dict) else None
     value = digest.hexdigest()
     cache[relative_path] = {"sha256": value, "stat": signature}
     return value
+
+
+def _task_identity(model, owner_key):
+    from app.models import Asset, Accessory
+    if model.__tablename__ == "asset_images":
+        obj = db.session.get(Asset, int(owner_key))
+        if obj is not None:
+            return {
+                "device_type": "主设备", "device_id": obj.id,
+                "group_no": (obj.group_no or "").strip(),
+                "asset_no": (obj.internal_no or obj.group_no or f"ID:{obj.id}").strip(),
+                "asset_name": (obj.name or "").strip(),
+            }
+    elif model.__tablename__ == "accessory_images":
+        obj = db.session.get(Accessory, int(owner_key))
+        if obj is not None:
+            return {
+                "device_type": "配件", "device_id": obj.id,
+                "group_no": (obj.sub_group_no or "").strip(),
+                "asset_no": (obj.sub_internal_no or obj.sub_group_no or f"ID:{obj.id}").strip(),
+                "asset_name": (obj.name or "").strip(),
+            }
+    location = str(owner_key or "").strip()
+    return {
+        "device_type": "货架", "device_id": None, "group_no": location,
+        "asset_no": location or "货架", "asset_name": "货架图片",
+    }
+
+
+def _stage_save(file_storage, subdir, prefix, expected_digest=None, expected_size=None):
+    """Persist one upload on local VPS disk; cloud/mount I/O is deferred."""
+    if subdir not in IMAGE_SUBDIRS:
+        raise ValueError("Invalid upload folder")
+    extension = file_storage.filename.rsplit(".", 1)[-1].lower()
+    if extension not in IMAGE_EXTENSIONS:
+        raise ValueError("仅支持 JPG、JPEG、PNG 和 WebP 原图")
+    prefix = re.sub(r"[^A-Za-z0-9_-]+", "_", str(prefix)).strip("._-") or "asset"
+    random_part = "".join(random.choices(string.ascii_letters + string.digits, k=6))
+    filename = f"{prefix}.{datetime.now():%Y.%m.%d}.{random_part}.{extension}"
+    relative = f"{subdir}/{filename}"
+
+    spool_name = uuid.uuid4().hex + ".ready"
+    final_spool = spool_path(spool_name)
+    temporary = final_spool.with_suffix(".part")
+    digest = sha256()
+    size = 0
+    try:
+        file_storage.stream.seek(0)
+        with temporary.open("wb") as handle:
+            while True:
+                chunk = file_storage.stream.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                handle.write(chunk)
+                digest.update(chunk)
+                size += len(chunk)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        actual_digest = digest.hexdigest()
+        if expected_size is not None and int(expected_size) != size:
+            raise OSError("上传暂存文件大小校验失败")
+        if expected_digest and str(expected_digest) != actual_digest:
+            raise OSError("上传暂存文件内容校验失败")
+        os.replace(temporary, final_spool)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        final_spool.unlink(missing_ok=True)
+        raise
+    finally:
+        file_storage.stream.seek(0)
+    db.session.info.setdefault("ism_new_spool_files", []).append(str(final_spool))
+    return relative, spool_name, actual_digest, size
+
+
+def _cancel_pending_sync(relative_path):
+    tasks = ImageSyncTask.query.filter(
+        ImageSyncTask.relative_path == relative_path,
+        ImageSyncTask.state != "done",
+    ).all()
+    for task in tasks:
+        try:
+            db.session.info.setdefault("ism_delete_spool_files", []).append(str(spool_path(task.spool_name)))
+        except ValueError:
+            pass
+        db.session.delete(task)
 
 
 def _atomic_save(file_storage, subdir, prefix):
@@ -227,6 +371,7 @@ def _atomic_save(file_storage, subdir, prefix):
 
 
 def _schedule_delete(relative_path, recycle=False):
+    _cancel_pending_sync(relative_path)
     path, root = _existing_image_path(relative_path)
     db.session.info.setdefault("ism_delete_image_files", []).append(
         (str(path), str(root), relative_path, bool(recycle))
@@ -240,6 +385,14 @@ def _after_commit(session_obj):
     if session_obj.in_nested_transaction():
         return
     session_obj.info.pop("ism_new_image_files", None)
+    # New uploads live in local spool after commit; the background worker owns them.
+    session_obj.info.pop("ism_new_spool_files", None)
+    for spool_file in session_obj.info.pop("ism_delete_spool_files", []):
+        try:
+            Path(spool_file).unlink(missing_ok=True)
+        except OSError:
+            if has_request_context():
+                current_app.logger.exception("Cancelled spool cleanup failed: %s", spool_file)
     for filename, root, relative, recycle in session_obj.info.pop("ism_delete_image_files", []):
         try:
             source = Path(filename)
@@ -268,6 +421,13 @@ def _after_rollback(session_obj):
     if session_obj.in_nested_transaction():
         return
     session_obj.info.pop("ism_delete_image_files", None)
+    session_obj.info.pop("ism_delete_spool_files", None)
+    for filename in session_obj.info.pop("ism_new_spool_files", []):
+        try:
+            Path(filename).unlink(missing_ok=True)
+        except OSError:
+            if has_request_context():
+                current_app.logger.exception("Uncommitted spool cleanup failed: %s", filename)
     for filename in session_obj.info.pop("ism_new_image_files", []):
         try:
             Path(filename).unlink(missing_ok=True)
@@ -326,13 +486,20 @@ def update_images(model, owner_field, owner_key, files, subdir, prefix,
         if digest in known:
             skipped += 1
             continue
-        relative = _atomic_save(item, subdir, prefix)
+        relative, spool_name, actual_digest, staged_size = _stage_save(
+            item, subdir, prefix, expected_digest=digest, expected_size=size
+        )
         image = model(**{owner_field: owner_key, "image_path": relative})
         db.session.add(image)
+        identity = _task_identity(model, owner_key)
+        db.session.add(ImageSyncTask(
+            relative_path=relative, spool_name=spool_name, sha256=actual_digest,
+            size_bytes=staged_size, state="pending", attempts=0,
+            created_at=_utc_naive_now(), updated_at=_utc_naive_now(), **identity
+        ))
         remaining.append(image)
-        stat = _safe_image_path(relative).stat()
-        cache[relative] = {"sha256": digest, "stat": [stat.st_size, stat.st_mtime_ns]}
-        known.add(digest)
+        cache[relative] = {"sha256": actual_digest, "size": staged_size}
+        known.add(actual_digest)
         saved += 1
     while len(remaining) > 5:
         old = remaining.pop(0)
@@ -341,8 +508,9 @@ def update_images(model, owner_field, owner_key, files, subdir, prefix,
     scope.fingerprints = json.dumps({img.image_path: cache[img.image_path] for img in remaining if img.image_path in cache})
     if has_request_context():
         g.ism_uploaded_count = getattr(g, "ism_uploaded_count", 0) + saved
+        g.ism_queued_count = getattr(g, "ism_queued_count", 0) + saved
         g.ism_duplicate_count = getattr(g, "ism_duplicate_count", 0) + skipped
-    return {"saved": saved, "duplicates": skipped, "deleted": deleted}
+    return {"saved": saved, "queued": saved, "duplicates": skipped, "deleted": deleted}
 
 
 def _wants_json():
@@ -358,6 +526,7 @@ def _success_response(destination, repeated=False):
     if _wants_json():
         return jsonify(ok=True, redirect_url=destination, repeated=repeated,
                        uploaded=getattr(g, "ism_uploaded_count", 0),
+                       queued=getattr(g, "ism_queued_count", 0),
                        duplicates=getattr(g, "ism_duplicate_count", 0))
     return redirect(destination, code=303)
 
@@ -420,7 +589,7 @@ def register_image_uploads(app):
     def _rollback_unfinished_upload(_error):
         # Release retry/scope locks on validation errors (including HTTP 200
         # HTML error forms) and clean files staged before any failure.
-        if (getattr(g, "ism_upload_receipt", None) is not None or db.session.info.get("ism_new_image_files") or db.session.info.get("ism_delete_image_files")) and not getattr(g, "ism_upload_saved", False):
+        if (getattr(g, "ism_upload_receipt", None) is not None or db.session.info.get("ism_new_image_files") or db.session.info.get("ism_new_spool_files") or db.session.info.get("ism_delete_image_files")) and not getattr(g, "ism_upload_saved", False):
             db.session.rollback()
 
     @app.errorhandler(413)
@@ -441,8 +610,26 @@ def serve_image(filename):
         path, actual_root = _existing_image_path(filename)
     except (TypeError, ValueError):
         abort(404)
-    if not path.is_file():
-        abort(404)
+    try:
+        exists = path.is_file()
+    except OSError:
+        exists = False
+    if not exists:
+        task = ImageSyncTask.query.filter_by(relative_path=filename).order_by(ImageSyncTask.id.desc()).first()
+        if task is None:
+            abort(404)
+        try:
+            pending = spool_path(task.spool_name)
+            if not pending.is_file():
+                abort(404)
+        except (OSError, ValueError):
+            abort(404)
+        response = send_from_directory(str(pending.parent), pending.name, conditional=True, max_age=0)
+        response.mimetype = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Vary"] = "Cookie"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
     primary_root = _upload_root()
     # X-Accel-Redirect is configured only for the active root. Historical
     # local-root images fall back to Flask so old and new layouts can coexist.

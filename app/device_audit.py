@@ -62,11 +62,11 @@ def _describe_image_changes(image_result):
     if not image_result:
         return []
     parts = []
-    saved = int(image_result.get("saved", 0) or 0)
+    queued = int(image_result.get("queued", image_result.get("saved", 0)) or 0)
     deleted = int(image_result.get("deleted", 0) or 0)
     duplicates = int(image_result.get("duplicates", 0) or 0)
-    if saved:
-        parts.append(f"图片：上传{saved}张")
+    if queued:
+        parts.append(f"图片：已接收{queued}张，等待后台同步")
     if deleted:
         parts.append(f"图片：删除{deleted}张")
     if duplicates:

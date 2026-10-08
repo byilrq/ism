@@ -22,6 +22,7 @@ BACKUP_FILE = f"{BACKUP_DIR}/ism_latest.sql"
 CODE_BACKUP_FILE = f"{BACKUP_DIR}/ism_code_latest.tar.gz"
 LOG_FILE = "/var/log/ism_backup.log"
 SERVICE_NAME = "ism"
+IMAGE_WORKER_SERVICE_NAME = "ism-image-worker"
 APP_ROOT = "/root/ism"
 INIT_DB_SCRIPT = f"{APP_ROOT}/init_db.py"
 VENV_PYTHON = f"{APP_ROOT}/venv/bin/python"
@@ -122,7 +123,7 @@ def backup_code():
     app_root = Path(APP_ROOT).resolve()
     runtime_top_files = {
         "config.yaml", "configure_media.py", "init_db.py", "ism.sh",
-        "ism_backup.py", "requirements.txt", "run.py",
+        "ism_backup.py", "image_worker.py", "requirements.txt", "run.py",
     }
 
     def should_include(path):
@@ -300,6 +301,10 @@ def restore_database(db_name, db_user, backup_path=BACKUP_FILE):
 
     service_stopped = False
     try:
+        subprocess.run(
+            ["systemctl", "stop", IMAGE_WORKER_SERVICE_NAME],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120,
+        )
         stop_result = subprocess.run(
             ["systemctl", "stop", SERVICE_NAME],
             stdout=subprocess.DEVNULL,
@@ -364,8 +369,13 @@ def restore_database(db_name, db_user, backup_path=BACKUP_FILE):
             log_msg(f"Failed to start {SERVICE_NAME}: {start_result.stderr.decode(errors='ignore')}", "ERR")
             return False
 
+        subprocess.run(
+            ["systemctl", "start", IMAGE_WORKER_SERVICE_NAME],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120,
+        )
         log_msg(f"Database restore completed: {backup_file}")
         log_msg(f"Service started: {SERVICE_NAME}")
+        log_msg(f"Image worker started: {IMAGE_WORKER_SERVICE_NAME}")
         return True
     except Exception as e:
         log_msg(f"Restore error: {e}", "ERR")

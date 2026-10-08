@@ -20,7 +20,7 @@ def initialize():
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         app = create_app()
         with app.app_context():
-            from app.image_uploads import ImageUploadSubmission
+            from app.image_uploads import ImageUploadSubmission, ImageSyncTask
             db.create_all()
 
             # db.create_all() does not add columns to an existing table. Keep
@@ -87,6 +87,15 @@ def initialize():
             ImageUploadSubmission.query.filter(
                 ImageUploadSubmission.created_at < datetime.now(UTC).replace(tzinfo=None) - timedelta(days=90),
                 ImageUploadSubmission.redirect_url.isnot(None),
+            ).delete(synchronize_session=False)
+            db.session.commit()
+
+            # Keep pending/failed tasks forever until handled; trim only completed
+            # task metadata after 90 days. Image files themselves live in storage.
+            ImageSyncTask.query.filter(
+                ImageSyncTask.state == "done",
+                ImageSyncTask.synced_at.isnot(None),
+                ImageSyncTask.synced_at < datetime.now(UTC).replace(tzinfo=None) - timedelta(days=90),
             ).delete(synchronize_session=False)
             db.session.commit()
     print('ISM database initialization complete (additive only).')
