@@ -131,10 +131,6 @@ function getVisibleSelectionInputs(){
     return Array.from(document.querySelectorAll('#asset-batch-form input[type="checkbox"][name="selected_items"]'));
 }
 
-function getAllFilteredSelectedItems(){
-    return {{ all_filtered_selected_items|tojson }} || [];
-}
-
 function getSelectedItemValues(){
     const form = document.getElementById('asset-batch-form');
     if(!form){ return []; }
@@ -165,15 +161,11 @@ function syncAllFilteredSelection(source){
     const visibleItems = getVisibleSelectionInputs();
     if(source.checked){
         visibleItems.forEach(function(item){ item.checked = true; });
-        const visibleValues = new Set(visibleItems.map(function(item){ return item.value; }));
-        getAllFilteredSelectedItems().forEach(function(value){
-            if(visibleValues.has(value)){ return; }
-            const hidden = document.createElement('input');
-            hidden.type = 'hidden';
-            hidden.name = 'selected_items';
-            hidden.value = value;
-            box.appendChild(hidden);
-        });
+        const hidden = document.createElement('input');
+        hidden.type = 'hidden';
+        hidden.name = 'select_all_filtered';
+        hidden.value = '1';
+        box.appendChild(hidden);
     }else{
         visibleItems.forEach(function(item){ item.checked = false; });
     }

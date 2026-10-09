@@ -24,6 +24,73 @@ def initialize():
             from app.image_cache import ImageCacheTask, ImageViewLease
             db.create_all()
 
+            # Search acceleration is additive and does not rewrite business data.
+            # The generated suffix columns preserve the established strict 6-digit
+            # identifier rule while making that lookup indexable.
+            search_column_ddl = {
+                "assets": {
+                    "internal_no_suffix6": (
+                        "ALTER TABLE assets ADD COLUMN internal_no_suffix6 VARCHAR(6) "
+                        "GENERATED ALWAYS AS (RIGHT(internal_no, 6)) PERSISTENT"
+                    ),
+                    "group_no_suffix6": (
+                        "ALTER TABLE assets ADD COLUMN group_no_suffix6 VARCHAR(6) "
+                        "GENERATED ALWAYS AS (RIGHT(group_no, 6)) PERSISTENT"
+                    ),
+                },
+                "accessories": {
+                    "sub_internal_no_suffix6": (
+                        "ALTER TABLE accessories ADD COLUMN sub_internal_no_suffix6 VARCHAR(6) "
+                        "GENERATED ALWAYS AS (CASE "
+                        "WHEN sub_internal_no IS NULL THEN NULL "
+                        "WHEN LOCATE('-', sub_internal_no) > 0 THEN RIGHT(SUBSTRING_INDEX(sub_internal_no, '-', 1), 6) "
+                        "ELSE RIGHT(sub_internal_no, 6) END) PERSISTENT"
+                    ),
+                    "sub_group_no_suffix6": (
+                        "ALTER TABLE accessories ADD COLUMN sub_group_no_suffix6 VARCHAR(6) "
+                        "GENERATED ALWAYS AS (CASE "
+                        "WHEN sub_group_no IS NULL THEN NULL "
+                        "WHEN LOCATE('-', sub_group_no) > 0 THEN RIGHT(SUBSTRING_INDEX(sub_group_no, '-', 1), 6) "
+                        "ELSE RIGHT(sub_group_no, 6) END) PERSISTENT"
+                    ),
+                },
+            }
+
+            inspector = inspect(db.engine)
+            table_names = set(inspector.get_table_names())
+            for table_name, columns in search_column_ddl.items():
+                if table_name not in table_names:
+                    continue
+                existing_columns = {col["name"] for col in inspector.get_columns(table_name)}
+                for column_name, ddl in columns.items():
+                    if column_name not in existing_columns:
+                        db.session.execute(text(ddl))
+                        db.session.commit()
+                inspector = inspect(db.engine)
+
+            search_indexes = {
+                "assets": {
+                    "idx_assets_internal_suffix6": "CREATE INDEX idx_assets_internal_suffix6 ON assets (internal_no_suffix6)",
+                    "idx_assets_group_suffix6": "CREATE INDEX idx_assets_group_suffix6 ON assets (group_no_suffix6)",
+                    "idx_assets_search_filter": "CREATE INDEX idx_assets_search_filter ON assets (deleted_at, status, asset_date, id)",
+                },
+                "accessories": {
+                    "idx_accessories_internal_suffix6": "CREATE INDEX idx_accessories_internal_suffix6 ON accessories (sub_internal_no_suffix6)",
+                    "idx_accessories_group_suffix6": "CREATE INDEX idx_accessories_group_suffix6 ON accessories (sub_group_no_suffix6)",
+                    "idx_accessories_search_filter": "CREATE INDEX idx_accessories_search_filter ON accessories (deleted_at, status, asset_date, id)",
+                },
+            }
+            inspector = inspect(db.engine)
+            for table_name, indexes in search_indexes.items():
+                if table_name not in table_names:
+                    continue
+                existing_indexes = {idx["name"] for idx in inspector.get_indexes(table_name)}
+                for index_name, ddl in indexes.items():
+                    if index_name not in existing_indexes:
+                        db.session.execute(text(ddl))
+                        db.session.commit()
+                inspector = inspect(db.engine)
+
             # db.create_all() does not add columns to an existing table. Keep
             # the device audit table additive so manual code updates can be
             # applied safely without rebuilding the business database.

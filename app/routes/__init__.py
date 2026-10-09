@@ -9,7 +9,7 @@ import yaml
 
 from flask import request, redirect, url_for, render_template, render_template_string, send_file, session, jsonify
 from flask_login import login_user, logout_user, login_required, current_user
-from sqlalchemy import or_, func, and_
+from sqlalchemy import or_, func, and_, select, union_all, literal, case, cast, Integer, literal_column
 from openpyxl import Workbook
 from app.models import (
     User, Asset, Accessory, DictOption,
@@ -832,6 +832,301 @@ def build_search_rows(keyword="", searched=False):
     return rows
 
 
+
+def _search_asset_row(item, accessory_count=0):
+    return {
+        "row_type": "asset",
+        "id": item.id,
+        "type_text": "主设备",
+        "internal_no": item.internal_no or "",
+        "group_no": item.group_no or "",
+        "name": item.name,
+        "model": item.model or "",
+        "status": normalize_status_value(item.status),
+        "owner": item.owner or "",
+        "location": item.location or "",
+        "location_detail_url": url_for("asset_location_detail", location=item.location) if item.location else "",
+        "parent_asset_id": "",
+        "accessory_count": accessory_count,
+        "detail_url": url_for("asset_detail", asset_id=item.id),
+        "asset_date_text": item.asset_date.isoformat() if item.asset_date else ""
+    }
+
+
+def _search_accessory_row(item, resolve_missing_parent=False):
+    parent_asset_id = item.parent_asset_id or ""
+    if resolve_missing_parent and not parent_asset_id:
+        parent_asset_id = resolve_parent_asset_id(item.sub_internal_no, item.sub_group_no) or ""
+    return {
+        "row_type": "accessory",
+        "id": item.id,
+        "type_text": "配件",
+        "internal_no": item.sub_internal_no or "",
+        "group_no": item.sub_group_no or "",
+        "name": item.name,
+        "model": item.model or "",
+        "status": normalize_status_value(item.status),
+        "owner": item.owner or "",
+        "location": item.location or "",
+        "location_detail_url": url_for("asset_location_detail", location=item.location) if item.location else "",
+        "parent_asset_id": parent_asset_id,
+        "accessory_count": 0,
+        "detail_url": url_for("accessory_detail", accessory_id=item.id),
+        "asset_date_text": item.asset_date.isoformat() if item.asset_date else ""
+    }
+
+
+def _asset_search_sort_expression():
+    """SQL equivalent of get_asset_sort_key() for the database fast path."""
+    group_no = func.nullif(func.trim(func.coalesce(Asset.group_no, "")), "")
+    internal_no = func.nullif(func.trim(func.coalesce(Asset.internal_no, "")), "")
+    return func.coalesce(group_no, internal_no, "~~~~")
+
+
+def _accessory_search_sort_expressions():
+    """SQL equivalent of get_accessory_suffix_sort_key()."""
+    group_no = func.trim(func.coalesce(Accessory.sub_group_no, ""))
+    internal_no = func.trim(func.coalesce(Accessory.sub_internal_no, ""))
+    group_has_suffix = group_no.op("REGEXP")(r"-[0-9]+$")
+    internal_has_suffix = internal_no.op("REGEXP")(r"-[0-9]+$")
+
+    group_suffix = func.substring_index(group_no, "-", -1)
+    internal_suffix = func.substring_index(internal_no, "-", -1)
+    group_prefix = func.left(group_no, func.length(group_no) - func.length(group_suffix) - 1)
+    internal_prefix = func.left(internal_no, func.length(internal_no) - func.length(internal_suffix) - 1)
+    fallback_value = func.coalesce(func.nullif(group_no, ""), func.nullif(internal_no, ""), "~~~~")
+
+    sort_flag = case((or_(group_has_suffix, internal_has_suffix), 0), else_=1)
+    sort_prefix = case(
+        (group_has_suffix, group_prefix),
+        (internal_has_suffix, internal_prefix),
+        else_=fallback_value,
+    )
+    sort_num = case(
+        (group_has_suffix, cast(group_suffix, Integer)),
+        (internal_has_suffix, cast(internal_suffix, Integer)),
+        else_=10 ** 12,
+    )
+    sort_len = case(
+        (group_has_suffix, func.char_length(group_suffix)),
+        (internal_has_suffix, func.char_length(internal_suffix)),
+        else_=0,
+    )
+    sort_value = case(
+        (group_has_suffix, group_no),
+        (internal_has_suffix, internal_no),
+        else_=fallback_value,
+    )
+    return sort_flag, sort_prefix, sort_num, sort_len, sort_value
+
+
+def _search_status_condition(column, status_filter):
+    status_filter = normalize_status_value(status_filter)
+    if not status_filter:
+        return None
+    # Python legacy path compares normalize_text(status) with the selected value.
+    # TRIM/COALESCE keeps that result set identical while letting MariaDB filter first.
+    return func.trim(func.coalesce(column, "")) == status_filter
+
+
+def _keyword_has_number_expansion_match(keyword):
+    """Return True when legacy parent/sibling expansion semantics are required."""
+    keyword = normalize_text(keyword)
+    if not keyword:
+        return False
+
+    asset_match = db.session.query(Asset.id).filter(
+        Asset.deleted_at.is_(None),
+        or_(Asset.internal_no == keyword, Asset.group_no == keyword),
+    ).limit(1).first()
+    if asset_match:
+        return True
+
+    accessory_match = db.session.query(Accessory.id).filter(
+        Accessory.deleted_at.is_(None),
+        or_(
+            Accessory.sub_internal_no == keyword,
+            Accessory.sub_group_no == keyword,
+            Accessory.sub_internal_no.like(f"{keyword}-%"),
+            Accessory.sub_group_no.like(f"{keyword}-%"),
+        ),
+    ).limit(1).first()
+    return bool(accessory_match)
+
+
+def _fast_search_mode(keyword):
+    """Select a precision-preserving SQL fast path, or None for legacy behavior."""
+    keyword = normalize_text(keyword)
+    if not keyword:
+        return None
+    if re.fullmatch(r"\d{6}", keyword):
+        return "suffix6"
+    # Keep every 7+ digit identifier and explicit group/accessory code on the
+    # legacy path. This preserves the established number/parent expansion rules.
+    if re.fullmatch(r"\d{6,}", keyword) or re.fullmatch(r"\d{18}-\d+", keyword):
+        return None
+    if _keyword_has_number_expansion_match(keyword):
+        return None
+    return "text"
+
+
+def _build_fast_search_selects(keyword, mode, status_filter="", device_type_filter=""):
+    device_type_filter = normalize_text(device_type_filter)
+    if device_type_filter and device_type_filter not in {"主设备", "配件"}:
+        return []
+
+    include_assets = device_type_filter != "配件"
+    include_accessories = device_type_filter != "主设备"
+    selects = []
+
+    if include_assets:
+        conditions = [Asset.deleted_at.is_(None)]
+        status_condition = _search_status_condition(Asset.status, status_filter)
+        if status_condition is not None:
+            conditions.append(status_condition)
+
+        if mode == "suffix6":
+            conditions.append(or_(
+                literal_column("assets.internal_no_suffix6") == keyword,
+                literal_column("assets.group_no_suffix6") == keyword,
+            ))
+        else:
+            conditions.append(or_(
+                text_like_ci(Asset.owner, keyword),
+                location_like(Asset.location, keyword),
+                text_like_ci(Asset.name, keyword),
+                text_like_ci(Asset.model, keyword),
+                text_like_ci(Asset.remark, keyword),
+            ))
+
+        asset_sort = _asset_search_sort_expression()
+        selects.append(
+            select(
+                literal("asset").label("row_type"),
+                Asset.id.label("entity_id"),
+                Asset.asset_date.label("asset_date"),
+                literal(0).label("type_rank"),
+                literal(0).label("sort_flag"),
+                asset_sort.label("sort_prefix"),
+                literal(0).label("sort_num"),
+                literal(0).label("sort_len"),
+                literal("").label("sort_value"),
+                Asset.id.label("sort_id"),
+            ).where(and_(*conditions))
+        )
+
+    if include_accessories:
+        conditions = [Accessory.deleted_at.is_(None)]
+        status_condition = _search_status_condition(Accessory.status, status_filter)
+        if status_condition is not None:
+            conditions.append(status_condition)
+
+        if mode == "suffix6":
+            conditions.append(or_(
+                literal_column("accessories.sub_internal_no_suffix6") == keyword,
+                literal_column("accessories.sub_group_no_suffix6") == keyword,
+            ))
+        else:
+            conditions.append(or_(
+                text_like_ci(Accessory.owner, keyword),
+                location_like(Accessory.location, keyword),
+                text_like_ci(Accessory.name, keyword),
+                text_like_ci(Accessory.model, keyword),
+                text_like_ci(Accessory.remark, keyword),
+            ))
+
+        sort_flag, sort_prefix, sort_num, sort_len, sort_value = _accessory_search_sort_expressions()
+        selects.append(
+            select(
+                literal("accessory").label("row_type"),
+                Accessory.id.label("entity_id"),
+                Accessory.asset_date.label("asset_date"),
+                literal(1).label("type_rank"),
+                sort_flag.label("sort_flag"),
+                sort_prefix.label("sort_prefix"),
+                sort_num.label("sort_num"),
+                sort_len.label("sort_len"),
+                sort_value.label("sort_value"),
+                Accessory.id.label("sort_id"),
+            ).where(and_(*conditions))
+        )
+
+    return selects
+
+
+def build_fast_search_page(keyword, status_filter="", device_type_filter="", page=1, per_page=30,
+                           sort_field="", sort_order=""):
+    """Database-side filtering/sorting/paging for result sets with no expansion semantics.
+
+    Returns None when the request must use the legacy builder. Otherwise returns
+    {rows, total}. Search meaning is unchanged; only where filtering/paging runs changes.
+    """
+    keyword = normalize_text(keyword)
+    mode = _fast_search_mode(keyword)
+    if mode is None:
+        return None
+
+    selects = _build_fast_search_selects(
+        keyword=keyword,
+        mode=mode,
+        status_filter=status_filter,
+        device_type_filter=device_type_filter,
+    )
+    if not selects:
+        return {"rows": [], "total": 0}
+
+    source = (selects[0] if len(selects) == 1 else union_all(*selects)).subquery("ism_search_fast")
+    total = int(db.session.execute(select(func.count()).select_from(source)).scalar_one() or 0)
+
+    default_order = [
+        source.c.type_rank.asc(),
+        source.c.sort_flag.asc(),
+        source.c.sort_prefix.asc(),
+        source.c.sort_num.asc(),
+        source.c.sort_len.asc(),
+        source.c.sort_value.asc(),
+        source.c.sort_id.asc(),
+    ]
+
+    sort_order = normalize_text(sort_order).lower()
+    if normalize_text(sort_field) == "asset_date" and sort_order in {"asc", "desc"}:
+        date_null_rank = case((source.c.asset_date.is_(None), 1), else_=0)
+        date_order = source.c.asset_date.desc() if sort_order == "desc" else source.c.asset_date.asc()
+        order_by = [date_null_rank.asc(), date_order] + default_order
+    else:
+        order_by = default_order
+
+    offset = max(0, (int(page) - 1) * int(per_page))
+    key_rows = db.session.execute(
+        select(source.c.row_type, source.c.entity_id)
+        .order_by(*order_by)
+        .offset(offset)
+        .limit(int(per_page))
+    ).all()
+
+    asset_ids = [int(row.entity_id) for row in key_rows if row.row_type == "asset"]
+    accessory_ids = [int(row.entity_id) for row in key_rows if row.row_type == "accessory"]
+    asset_map = {}
+    accessory_map = {}
+    if asset_ids:
+        asset_map = {item.id: item for item in Asset.query.filter(Asset.id.in_(asset_ids)).all()}
+    if accessory_ids:
+        accessory_map = {item.id: item for item in Accessory.query.filter(Accessory.id.in_(accessory_ids)).all()}
+
+    rows = []
+    for key_row in key_rows:
+        if key_row.row_type == "asset":
+            item = asset_map.get(int(key_row.entity_id))
+            if item is not None:
+                rows.append(_search_asset_row(item, accessory_count=0))
+        else:
+            item = accessory_map.get(int(key_row.entity_id))
+            if item is not None:
+                rows.append(_search_accessory_row(item, resolve_missing_parent=(mode == "suffix6")))
+
+    return {"rows": rows, "total": total}
+
+
 def is_group_no_value(value):
     value = normalize_text(value)
     return bool(re.fullmatch(r"\d{18}", value))
@@ -1351,34 +1646,56 @@ def register_routes(app):
         except:
             page = 1
 
-        all_rows = build_search_rows(keyword=keyword, searched=searched)
+        fast_result = None
+        if searched and keyword:
+            try:
+                fast_result = build_fast_search_page(
+                    keyword=keyword,
+                    status_filter=status_filter,
+                    device_type_filter=device_type_filter,
+                    page=page,
+                    per_page=per_page,
+                    sort_field=sort_field,
+                    sort_order=sort_order,
+                )
+            except Exception:
+                # Compatibility fallback: if an existing installation has not yet
+                # run init_db.py (for example the suffix generated columns are not
+                # present), keep the old exact search behavior instead of failing.
+                db.session.rollback()
+                fast_result = None
 
-        if searched and status_filter:
-            all_rows = [
-                row for row in all_rows
-                if normalize_text(row.get("status")) == status_filter
-            ]
+        if fast_result is not None:
+            rows = fast_result["rows"]
+            total = fast_result["total"]
+        else:
+            all_rows = build_search_rows(keyword=keyword, searched=searched)
 
-        if searched and device_type_filter:
-            all_rows = [
-                row for row in all_rows
-                if normalize_text(row.get("type_text")) == device_type_filter
-            ]
+            if searched and status_filter:
+                all_rows = [
+                    row for row in all_rows
+                    if normalize_text(row.get("status")) == status_filter
+                ]
 
-        if searched and sort_field == "asset_date" and sort_order in ["asc", "desc"]:
-            rows_with_date = [row for row in all_rows if normalize_text(row.get("asset_date_text"))]
-            rows_without_date = [row for row in all_rows if not normalize_text(row.get("asset_date_text"))]
-            rows_with_date.sort(
-                key=lambda row: normalize_text(row.get("asset_date_text")),
-                reverse=(sort_order == "desc")
-            )
-            all_rows = rows_with_date + rows_without_date
+            if searched and device_type_filter:
+                all_rows = [
+                    row for row in all_rows
+                    if normalize_text(row.get("type_text")) == device_type_filter
+                ]
 
-        total = len(all_rows)
+            if searched and sort_field == "asset_date" and sort_order in ["asc", "desc"]:
+                rows_with_date = [row for row in all_rows if normalize_text(row.get("asset_date_text"))]
+                rows_without_date = [row for row in all_rows if not normalize_text(row.get("asset_date_text"))]
+                rows_with_date.sort(
+                    key=lambda row: normalize_text(row.get("asset_date_text")),
+                    reverse=(sort_order == "desc")
+                )
+                all_rows = rows_with_date + rows_without_date
 
-        start = (page - 1) * per_page
-        end = start + per_page
-        rows = all_rows[start:end]
+            total = len(all_rows)
+            start = (page - 1) * per_page
+            end = start + per_page
+            rows = all_rows[start:end]
 
         # 当前页图片数量一次性聚合查询，避免逐行查询造成 N+1。
         asset_ids = [row["id"] for row in rows if row.get("row_type") == "asset"]
@@ -1408,7 +1725,9 @@ def register_routes(app):
                 row["image_count"] = int(accessory_image_counts.get(row["id"], 0))
 
         total_pages = (total + per_page - 1) // per_page if total else 1
-        all_filtered_selected_items = [f"{row['row_type']}:{row['id']}" for row in all_rows]
+        # Cross-page "select all" is now represented by one marker and resolved
+        # on submit, so normal searches no longer serialize every result ID.
+        all_filtered_selected_items = []
         error = ""
         if searched and total == 0:
             if keyword and (status_filter or device_type_filter):
@@ -1698,13 +2017,14 @@ def register_routes(app):
         if guard:
             return guard
         selected_items = request.form.getlist("selected_items")
+        select_all_filtered = normalize_text(request.form.get("select_all_filtered")) == "1"
 
         # 导出顺序必须与当前查询结果显示顺序一致。
         # 浏览器提交 selected_items 时，跨页"全选"会把当前页可见项放在前面、隐藏项放在后面，
         # 直接按提交顺序导出会打乱"主资产 + 配件按后缀排序"的显示顺序。
         # 因此服务端按当前筛选条件重新生成 all_rows，再按 all_rows 顺序过滤已选项。
         selected_item_set = set(selected_items)
-        if selected_item_set:
+        if selected_item_set or select_all_filtered:
             export_keyword = normalize_text(request.form.get("keyword"))
             export_status_filter = normalize_status_value(request.form.get("status_filter"))
             export_device_type_filter = normalize_text(request.form.get("device_type_filter"))
@@ -1734,21 +2054,24 @@ def register_routes(app):
                 )
                 ordered_rows = rows_with_date + rows_without_date
 
-            ordered_selected_items = []
-            remaining_selected_items = set(selected_item_set)
-            for row in ordered_rows:
-                key = f"{row.get('row_type')}:{row.get('id')}"
-                if key in remaining_selected_items:
-                    ordered_selected_items.append(key)
-                    remaining_selected_items.remove(key)
+            if select_all_filtered:
+                selected_items = [f"{row.get('row_type')}:{row.get('id')}" for row in ordered_rows]
+            else:
+                ordered_selected_items = []
+                remaining_selected_items = set(selected_item_set)
+                for row in ordered_rows:
+                    key = f"{row.get('row_type')}:{row.get('id')}"
+                    if key in remaining_selected_items:
+                        ordered_selected_items.append(key)
+                        remaining_selected_items.remove(key)
 
-            # 兜底：如果有极少数已选项不在当前筛选结果中，保留用户提交顺序追加，避免静默丢失。
-            for item in selected_items:
-                if item in remaining_selected_items:
-                    ordered_selected_items.append(item)
-                    remaining_selected_items.remove(item)
+                # 兜底：如果有极少数已选项不在当前筛选结果中，保留用户提交顺序追加，避免静默丢失。
+                for item in selected_items:
+                    if item in remaining_selected_items:
+                        ordered_selected_items.append(item)
+                        remaining_selected_items.remove(item)
 
-            selected_items = ordered_selected_items
+                selected_items = ordered_selected_items
 
         wb = Workbook()
         ws = wb.active
@@ -1798,6 +2121,7 @@ def register_routes(app):
         if guard:
             return guard
         selected_items = request.form.getlist("selected_items")
+        select_all_filtered = normalize_text(request.form.get("select_all_filtered")) == "1"
         delete_pin = normalize_text(request.form.get("delete_pin"))
         keyword = normalize_text(request.form.get("keyword"))
         status_filter = normalize_text(request.form.get("status_filter"))
@@ -1806,6 +2130,20 @@ def register_routes(app):
 
         if delete_pin != "0819":
             return "批量删除失败：Pin码错误"
+
+        if select_all_filtered:
+            selected_rows = build_search_rows(keyword=keyword, searched=True)
+            if status_filter:
+                selected_rows = [
+                    row for row in selected_rows
+                    if normalize_text(row.get("status")) == status_filter
+                ]
+            if device_type_filter:
+                selected_rows = [
+                    row for row in selected_rows
+                    if normalize_text(row.get("type_text")) == device_type_filter
+                ]
+            selected_items = [f"{row.get('row_type')}:{row.get('id')}" for row in selected_rows]
 
         asset_ids = set()
         accessory_ids = set()
