@@ -58,7 +58,7 @@ def patch_site(text, app_root, upload_root, max_bytes, version=(1, 26, 0),
         'send_timeout': '300s',
         'sendfile': 'on',
         'tcp_nopush': 'on',
-        'proxy_request_buffering': 'on',
+        'proxy_request_buffering': 'off',
         'proxy_buffering': 'on',
         'proxy_next_upstream': 'off',
         'proxy_read_timeout': '300s',
@@ -74,8 +74,9 @@ def patch_site(text, app_root, upload_root, max_bytes, version=(1, 26, 0),
             text = re.sub(pattern, lambda m, n=name, v=value: m.group(1) + n + ' ' + v + ';', text)
         else:
             directives.append(f'    {name} {value};')
-    # Bound server-side processing, not total upload duration. Body buffering
-    # means the Gunicorn worker is not held for a client's slow uplink.
+    # Stream upload bodies to Gunicorn so Werkzeug can write supported image
+    # parts directly to /root/ism/upload_spool while the client is uploading.
+    # This removes the former Nginx-buffer -> Flask-temp -> spool delay.
     for name in ('proxy_read_timeout', 'proxy_send_timeout'):
         text = re.sub(r'(?m)^(\s*)' + name + r'\s+[^;]*;', lambda m, n=name: m.group(1) + n + ' 300s;', text)
     ssl = bool(re.search(r'(?m)^\s*listen\s+[^;]*\bssl\b', text))

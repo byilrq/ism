@@ -533,6 +533,7 @@ server {
 
     location / {
         proxy_pass http://127.0.0.1:${INTERNAL_PORT};
+        proxy_request_buffering off;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_set_header Host \$host;
@@ -568,6 +569,7 @@ server {
 
     location / {
         proxy_pass http://127.0.0.1:${INTERNAL_PORT};
+        proxy_request_buffering off;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_set_header Host \$host;
@@ -2580,6 +2582,7 @@ server {
 
     location / {
         proxy_pass http://127.0.0.1:${INTERNAL_PORT};
+        proxy_request_buffering off;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_set_header Host \$host;
@@ -2606,6 +2609,7 @@ server {
 
     location / {
         proxy_pass http://127.0.0.1:${INTERNAL_PORT};
+        proxy_request_buffering off;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_set_header Host \$host;
@@ -2630,6 +2634,7 @@ server {
 
     location / {
         proxy_pass http://127.0.0.1:${INTERNAL_PORT};
+        proxy_request_buffering off;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_set_header Host \$host;
@@ -2654,6 +2659,7 @@ server {
 
     location / {
         proxy_pass http://127.0.0.1:${INTERNAL_PORT};
+        proxy_request_buffering off;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_set_header Host \$host;

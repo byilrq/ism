@@ -246,6 +246,11 @@ def _remove_recycle_manifest(device_type, device_id):
 
 def move_image_file_to_recycle(relative_path):
     """Move one live image into <upload_folder>/recycle preserving its DB-relative path."""
+    try:
+        from app.image_cache import invalidate_cached_image
+        invalidate_cached_image(relative_path)
+    except Exception:
+        pass
     safe_relative_path = _safe_relative_path(relative_path)
     if not safe_relative_path or safe_relative_path == RECYCLE_SUBDIR or safe_relative_path.startswith(f"{RECYCLE_SUBDIR}/"):
         return False
@@ -285,6 +290,11 @@ def delete_image_file(relative_path):
 
 
 def permanent_delete_image_file(relative_path):
+    try:
+        from app.image_cache import invalidate_cached_image
+        invalidate_cached_image(relative_path)
+    except Exception:
+        pass
     safe_relative_path = _safe_relative_path(relative_path)
     if not safe_relative_path:
         return

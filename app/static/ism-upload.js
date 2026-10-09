@@ -2,27 +2,11 @@
 (function () {
     'use strict';
     const queues = new Map();
-    const hashes = new WeakMap();
     const nativeSubmit = HTMLFormElement.prototype.submit;
     const allowed = /\.(jpe?g|png|webp)$/i;
     const meta = document.querySelector('meta[name="ism-max-content-length"]');
     const maxBytes = Number(meta && meta.content) || 20 * 1024 * 1024;
     const mb = n => (n / 1024 / 1024).toFixed(2) + ' MB';
-
-    async function fingerprint(file) {
-        if (hashes.has(file)) return hashes.get(file);
-        const task = (async () => {
-            if (window.crypto && crypto.subtle && file.arrayBuffer) {
-                const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
-                return Array.from(new Uint8Array(digest), x => x.toString(16).padStart(2, '0')).join('');
-            }
-            // Do not discard different photos merely because names/sizes match.
-            // The server always performs SHA-256, including on plain HTTP.
-            return null;
-        })();
-        hashes.set(file, task);
-        return task;
-    }
 
     function notice(form, text, error) {
         let el = form.querySelector('[data-ism-upload-status]');
@@ -110,12 +94,14 @@
             queues.set(textId, state);
         }
         if (state.form && state.form._ismBusy) return state.pending;
-        state.pending = state.pending.then(async function () {
+        state.pending = state.pending.then(function () {
             let duplicates = 0, overflow = 0, invalid = 0;
             for (const file of incoming) {
                 if (!allowed.test(file.name) || file.size === 0) { invalid++; continue; }
-                const key = await fingerprint(file);
-                if (state.files.some(item => item.file === file || (key && item.key === key))) {
+                // Do not hash/read the photo in the browser before upload.
+                // Exact content dedup is performed by the server/worker.
+                const key = [file.name, file.size, file.lastModified].join('\u0000');
+                if (state.files.some(item => item.file === file || item.key === key)) {
                     duplicates++;
                     continue;
                 }
@@ -182,7 +168,7 @@
                 if (value instanceof File) {
                     if (!value.name) continue;
                     size += value.size;
-                    parts.push([name, value.name, value.size, value.lastModified, await fingerprint(value)]);
+                    parts.push([name, value.name, value.size, value.lastModified]);
                 } else {
                     size += new TextEncoder().encode(value).length;
                     parts.push([name, value]);
@@ -212,9 +198,13 @@
             xhr.upload.onprogress = function (event) {
                 if (!event.lengthComputable) return;
                 const percent = Math.min(100, Math.floor(event.loaded * 100 / event.total));
-                notice(form, percent < 100
-                    ? '\u539f\u56fe\u4e0a\u4f20 ' + percent + '%\uff08' + mb(event.loaded) + ' / ' + mb(event.total) + '\uff09'
-                    : '\u5df2\u4e0a\u4f20\u81f3\u670d\u52a1\u5668\uff0c\u6b63\u5728\u8fdb\u5165\u540e\u53f0\u5b58\u50a8\u961f\u5217\u2026', false);
+                if (percent < 100) {
+                    notice(form, '\u539f\u56fe\u4e0a\u4f20 ' + percent + '%\uff08' + mb(event.loaded) + ' / ' + mb(event.total) + '\uff09', false);
+                } else {
+                    // The server streams the same bytes directly into its local
+                    // durable spool. No extra cloud/rclone wait is shown here.
+                    notice(form, '', false);
+                }
             };
             const uncertain = function () {
                 setBusy(form, false);

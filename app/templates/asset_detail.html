@@ -394,7 +394,8 @@ function requestInventory(formId, message){
 }
 </script>
 <meta name="ism-max-content-length" content="{{ config.get('MAX_CONTENT_LENGTH', 20971520) }}">
-<script src="{{ url_for('static', filename='ism-upload.js', v='20260928-ui-v14') }}" defer></script>
+<script src="{{ url_for('static', filename='ism-upload.js', v='20261008-async-v27') }}" defer></script>
+<script src="{{ url_for('static', filename='ism-image-cache.js', v='20261009-cache-v28') }}" defer></script>
 </head>
 <body class="ism-app">
 <div class="wrap">
@@ -509,5 +510,11 @@ function requestInventory(formId, message){
 </div>
 
 </div>
+
+<script>
+window.addEventListener('DOMContentLoaded', function () {
+    if (window.ISMImageCache) window.ISMImageCache.start('asset', {{ asset.id }});
+});
+</script>
 </body>
 </html>

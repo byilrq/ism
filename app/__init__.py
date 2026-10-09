@@ -1,8 +1,11 @@
-from flask import Flask
+from flask import Flask, Request
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 import os
 import json
+import io
+import hashlib
+import uuid
 import stat
 import time
 from datetime import datetime
@@ -10,6 +13,75 @@ from pathlib import Path
 import yaml
 
 BASE_DIR = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+UPLOAD_SPOOL_DIR = os.path.join(BASE_DIR, "upload_spool")
+_IMAGE_UPLOAD_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
+
+
+class _HashingUploadStream(io.BufferedRandom):
+    """Write an incoming image directly to the durable VPS spool while hashing it.
+
+    Werkzeug writes multipart image bytes into this stream as they arrive.  This
+    removes the old second full-file copy/read after the browser finishes the
+    upload.  Unclaimed partial files are deleted automatically when the request
+    closes; image_uploads._stage_save atomically renames a completed stream to
+    its durable .ready name.
+    """
+
+    def __init__(self, path):
+        raw = io.FileIO(str(path), mode="w+b")
+        super().__init__(raw)
+        self._ism_spool_path = str(path)
+        self._ism_hash = hashlib.sha256()
+        self._ism_size = 0
+        self._ism_claimed = False
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+
+    def write(self, data):
+        written = super().write(data)
+        if written:
+            self._ism_hash.update(memoryview(data)[:written])
+            self._ism_size += written
+        return written
+
+    @property
+    def ism_sha256(self):
+        return self._ism_hash.hexdigest()
+
+    @property
+    def ism_size(self):
+        return self._ism_size
+
+    def close(self):
+        if self.closed:
+            return
+        path = self._ism_spool_path
+        claimed = bool(self._ism_claimed)
+        try:
+            super().close()
+        finally:
+            if not claimed:
+                try:
+                    os.unlink(path)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
+
+
+class ISMRequest(Request):
+    """Stream supported image uploads directly into /root/ism/upload_spool."""
+
+    def _get_file_stream(self, total_content_length, content_type, filename=None, content_length=None):
+        name = str(filename or "")
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        if ext in _IMAGE_UPLOAD_EXTENSIONS:
+            os.makedirs(UPLOAD_SPOOL_DIR, mode=0o700, exist_ok=True)
+            path = os.path.join(UPLOAD_SPOOL_DIR, f".incoming-{uuid.uuid4().hex}.part")
+            return _HashingUploadStream(path)
+        return super()._get_file_stream(total_content_length, content_type, filename, content_length)
 
 def _load_cfg():
     path = os.path.join(BASE_DIR, "config.yaml")
@@ -154,6 +226,7 @@ login_manager.login_view = "login"
 
 def create_app(test_config=None):
     app = Flask(__name__)
+    app.request_class = ISMRequest
     app.config.from_object(FlaskConfig)
     if test_config:
         app.config.update(test_config)
@@ -169,6 +242,8 @@ def create_app(test_config=None):
     register_routes(app)
     from app.image_uploads import register_image_uploads
     register_image_uploads(app)
+    from app.image_cache import register_image_cache
+    register_image_cache(app)
 
     @app.context_processor
     def inject_runtime_status():

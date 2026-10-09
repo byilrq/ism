@@ -99,10 +99,17 @@ def _lock_row(model, key_name, key, **initial):
 
 
 def file_digest(file_storage):
+    """Return SHA-256/size without rereading streamed image uploads when possible."""
     cached = getattr(file_storage, "_ism_sha256", None)
     if cached:
         return cached
     stream = file_storage.stream
+    fast_hash = getattr(stream, "ism_sha256", None)
+    fast_size = getattr(stream, "ism_size", None)
+    if fast_hash is not None and fast_size is not None:
+        result = (str(fast_hash), int(fast_size))
+        file_storage._ism_sha256 = result
+        return result
     previous = stream.tell()
     stream.seek(0)
     digest = sha256()
@@ -276,7 +283,14 @@ def _task_identity(model, owner_key):
 
 
 def _stage_save(file_storage, subdir, prefix, expected_digest=None, expected_size=None):
-    """Persist one upload on local VPS disk; cloud/mount I/O is deferred."""
+    """Finalize an image already streamed to local VPS spool.
+
+    v27's request stream writes image bytes directly to /root/ism/upload_spool
+    while Werkzeug parses the multipart request, and computes SHA-256 in that
+    same pass.  This function therefore normally performs only flush/fsync + an
+    atomic rename.  The copy loop is retained as a compatibility fallback for
+    non-standard/older request streams.
+    """
     if subdir not in IMAGE_SUBDIRS:
         raise ValueError("Invalid upload folder")
     extension = file_storage.filename.rsplit(".", 1)[-1].lower()
@@ -289,34 +303,61 @@ def _stage_save(file_storage, subdir, prefix, expected_digest=None, expected_siz
 
     spool_name = uuid.uuid4().hex + ".ready"
     final_spool = spool_path(spool_name)
-    temporary = final_spool.with_suffix(".part")
-    digest = sha256()
-    size = 0
+    stream = file_storage.stream
+    incoming = getattr(stream, "_ism_spool_path", None)
+    direct_stream = bool(incoming)
+
     try:
-        file_storage.stream.seek(0)
-        with temporary.open("wb") as handle:
-            while True:
-                chunk = file_storage.stream.read(CHUNK_SIZE)
-                if not chunk:
-                    break
-                handle.write(chunk)
-                digest.update(chunk)
-                size += len(chunk)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temporary, 0o600)
-        actual_digest = digest.hexdigest()
-        if expected_size is not None and int(expected_size) != size:
-            raise OSError("上传暂存文件大小校验失败")
-        if expected_digest and str(expected_digest) != actual_digest:
-            raise OSError("上传暂存文件内容校验失败")
-        os.replace(temporary, final_spool)
+        if direct_stream:
+            stream.flush()
+            os.fsync(stream.fileno())
+            actual_digest = str(getattr(stream, "ism_sha256"))
+            size = int(getattr(stream, "ism_size"))
+            if expected_size is not None and int(expected_size) != size:
+                raise OSError("上传暂存文件大小校验失败")
+            if expected_digest and str(expected_digest) != actual_digest:
+                raise OSError("上传暂存文件内容校验失败")
+            if size <= 0:
+                raise ValueError("图片文件为空，请重新选择")
+            os.replace(str(incoming), final_spool)
+            stream._ism_claimed = True
+        else:
+            temporary = final_spool.with_suffix(".part")
+            digest = sha256()
+            size = 0
+            try:
+                stream.seek(0)
+                with temporary.open("wb") as handle:
+                    while True:
+                        chunk = stream.read(CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        handle.write(chunk)
+                        digest.update(chunk)
+                        size += len(chunk)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                actual_digest = digest.hexdigest()
+                if size <= 0:
+                    raise ValueError("图片文件为空，请重新选择")
+                if expected_size is not None and int(expected_size) != size:
+                    raise OSError("上传暂存文件大小校验失败")
+                if expected_digest and str(expected_digest) != actual_digest:
+                    raise OSError("上传暂存文件内容校验失败")
+                os.replace(temporary, final_spool)
+            except BaseException:
+                temporary.unlink(missing_ok=True)
+                raise
+            finally:
+                try:
+                    stream.seek(0)
+                except (OSError, ValueError):
+                    pass
+        os.chmod(final_spool, 0o600)
     except BaseException:
-        temporary.unlink(missing_ok=True)
         final_spool.unlink(missing_ok=True)
         raise
-    finally:
-        file_storage.stream.seek(0)
+
     db.session.info.setdefault("ism_new_spool_files", []).append(str(final_spool))
     return relative, spool_name, actual_digest, size
 
@@ -372,6 +413,13 @@ def _atomic_save(file_storage, subdir, prefix):
 
 def _schedule_delete(relative_path, recycle=False):
     _cancel_pending_sync(relative_path)
+    try:
+        from app.image_cache import cancel_cache_task
+        cancel_cache_task(relative_path)
+        db.session.info.setdefault("ism_invalidate_cache_files", []).append(relative_path)
+    except Exception:
+        # Cache is disposable and must never block a business write.
+        pass
     path, root = _existing_image_path(relative_path)
     db.session.info.setdefault("ism_delete_image_files", []).append(
         (str(path), str(root), relative_path, bool(recycle))
@@ -393,6 +441,13 @@ def _after_commit(session_obj):
         except OSError:
             if has_request_context():
                 current_app.logger.exception("Cancelled spool cleanup failed: %s", spool_file)
+    for relative in session_obj.info.pop("ism_invalidate_cache_files", []):
+        try:
+            from app.image_cache import remove_cached_file
+            remove_cached_file(relative)
+        except Exception:
+            if has_request_context():
+                current_app.logger.exception("Image cache invalidation failed: %s", relative)
     for filename, root, relative, recycle in session_obj.info.pop("ism_delete_image_files", []):
         try:
             source = Path(filename)
@@ -421,6 +476,7 @@ def _after_rollback(session_obj):
     if session_obj.in_nested_transaction():
         return
     session_obj.info.pop("ism_delete_image_files", None)
+    session_obj.info.pop("ism_invalidate_cache_files", None)
     session_obj.info.pop("ism_delete_spool_files", None)
     for filename in session_obj.info.pop("ism_new_spool_files", []):
         try:
@@ -434,6 +490,18 @@ def _after_rollback(session_obj):
         except OSError:
             if has_request_context():
                 current_app.logger.exception("Uncommitted image cleanup failed: %s", filename)
+
+
+def _cached_digest_only(relative_path, cache):
+    """Fast request-path dedup: never touch the remote/FUSE file tree."""
+    entry = cache.get(relative_path)
+    if isinstance(entry, dict) and entry.get("sha256"):
+        return entry.get("sha256")
+    task = ImageSyncTask.query.filter_by(relative_path=relative_path).order_by(ImageSyncTask.id.desc()).first()
+    if task is not None and task.sha256:
+        cache[relative_path] = {"sha256": task.sha256, "size": int(task.size_bytes or 0)}
+        return task.sha256
+    return None
 
 
 def update_images(model, owner_field, owner_key, files, subdir, prefix,
@@ -469,7 +537,10 @@ def update_images(model, owner_field, owner_key, files, subdir, prefix,
             remaining.append(image)
     known = set()
     for image in remaining:
-        digest = _disk_digest(image.image_path, cache)
+        # Never hash/read historical rclone files in the HTTP request. Cached
+        # hashes cover modern uploads; the background worker performs the rare
+        # historical-image dedup check without delaying the page.
+        digest = _cached_digest_only(image.image_path, cache)
         if digest:
             known.add(digest)
     incoming = [item for item in files if item and item.filename]
@@ -480,15 +551,16 @@ def update_images(model, owner_field, owner_key, files, subdir, prefix,
         extension = item.filename.rsplit(".", 1)[-1].lower()
         if "." not in item.filename or extension not in IMAGE_EXTENSIONS:
             raise ValueError("\u4ec5\u652f\u6301 JPG\u3001JPEG\u3001PNG \u548c WebP \u539f\u56fe")
-        digest, size = file_digest(item)
-        if size == 0:
-            raise ValueError("\u56fe\u7247\u6587\u4ef6\u4e3a\u7a7a\uff0c\u8bf7\u91cd\u65b0\u9009\u62e9")
-        if digest in known:
+        # Image bytes are already in the VPS spool by the time the route runs.
+        # Finalize that local file first; SHA-256 was computed while streaming.
+        relative, spool_name, actual_digest, staged_size = _stage_save(item, subdir, prefix)
+        if actual_digest in known:
+            try:
+                spool_path(spool_name).unlink(missing_ok=True)
+            except OSError:
+                pass
             skipped += 1
             continue
-        relative, spool_name, actual_digest, staged_size = _stage_save(
-            item, subdir, prefix, expected_digest=digest, expected_size=size
-        )
         image = model(**{owner_field: owner_key, "image_path": relative})
         db.session.add(image)
         identity = _task_identity(model, owner_key)
@@ -516,18 +588,22 @@ def update_images(model, owner_field, owner_key, files, subdir, prefix,
 def _wants_json():
     # Some reverse proxies/security layers may drop non-standard X-* headers.
     # The uploader also sends Accept: application/json, so either signal is
-    # sufficient.  Returning JSON avoids an unnecessary 303 round-trip after
-    # a successful multi-megabyte upload.
+    # sufficient. Returning JSON avoids an unnecessary 303 round-trip after
+    # the image is durable in the VPS spool and its pending task is committed.
     return (request.headers.get("X-ISM-Upload") == "1"
             or "application/json" in (request.headers.get("Accept") or "").lower())
 
 
 def _success_response(destination, repeated=False):
     if _wants_json():
-        return jsonify(ok=True, redirect_url=destination, repeated=repeated,
-                       uploaded=getattr(g, "ism_uploaded_count", 0),
-                       queued=getattr(g, "ism_queued_count", 0),
-                       duplicates=getattr(g, "ism_duplicate_count", 0))
+        queued = int(getattr(g, "ism_queued_count", 0) or 0)
+        response = jsonify(ok=True, redirect_url=destination, repeated=repeated,
+                           uploaded=getattr(g, "ism_uploaded_count", 0),
+                           queued=queued,
+                           duplicates=getattr(g, "ism_duplicate_count", 0))
+        # 202 means the durable local spool + DB queue are complete; final
+        # rclone/pCloud synchronization intentionally continues in background.
+        return response, (202 if queued else 200)
     return redirect(destination, code=303)
 
 
@@ -548,7 +624,8 @@ def register_image_uploads(app):
             return None
         if not request.mimetype == "multipart/form-data":
             return None
-        # Check the signed session before hashing large bodies or touching SQL.
+        # Check the signed session before touching the retry table. Image bytes
+        # have already streamed directly into the local VPS spool during multipart parsing.
         if not session.get("_user_id") and session.get("visitor_role") != "editor":
             return None
         token = request.form.get("_upload_request_id", "")
@@ -562,8 +639,15 @@ def register_image_uploads(app):
         digest.update(json.dumps(fields, ensure_ascii=False, separators=(",", ":")).encode())
         for key, item in request.files.items(multi=True):
             if item and item.filename:
-                value, size = file_digest(item)
-                digest.update(json.dumps([key, value, size], separators=(",", ":")).encode())
+                # Retry identity must not reread tens of MB after upload. The
+                # random request token plus immutable file metadata is enough
+                # to make a browser retry idempotent; content dedup uses the
+                # parser-time SHA-256 stored with the sync task.
+                stream = item.stream
+                size = getattr(stream, "ism_size", None)
+                if size is None:
+                    size = item.content_length or 0
+                digest.update(json.dumps([key, item.filename, int(size), item.mimetype or ""], separators=(",", ":")).encode())
         identity = str(session.get("_user_id") or ("visitor:" + session.get("visitor_role", "")))
         key = sha256(json.dumps([identity, request.endpoint, request.path, token]).encode()).hexdigest()
         receipt = _lock_row(ImageUploadSubmission, "submission_key", key,
@@ -606,6 +690,25 @@ def serve_image(filename):
     guard = ensure_read_access()
     if guard:
         return guard
+
+    try:
+        from app.image_cache import cached_file, queue_cache_path
+        cached = cached_file(filename, touch=True)
+    except Exception:
+        cached = None
+
+    # Local read cache is always preferred. It avoids touching rclone/FUSE and
+    # keeps recently viewed images available during a temporary mount outage.
+    if cached is not None:
+        response = send_from_directory(str(cached.parent.parent), filename, conditional=True,
+                                       max_age=IMAGE_CACHE_SECONDS)
+        response.mimetype = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        response.headers["Cache-Control"] = f"private, max-age={IMAGE_CACHE_SECONDS}, immutable"
+        response.headers["Vary"] = "Cookie"
+        response.headers["X-ISM-Image-Source"] = "vps-cache"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
     try:
         path, actual_root = _existing_image_path(filename)
     except (TypeError, ValueError):
@@ -614,6 +717,7 @@ def serve_image(filename):
         exists = path.is_file()
     except OSError:
         exists = False
+
     if not exists:
         task = ImageSyncTask.query.filter_by(relative_path=filename).order_by(ImageSyncTask.id.desc()).first()
         if task is None:
@@ -628,8 +732,17 @@ def serve_image(filename):
         response.mimetype = mimetypes.guess_type(filename)[0] or "application/octet-stream"
         response.headers["Cache-Control"] = "private, no-store"
         response.headers["Vary"] = "Cookie"
+        response.headers["X-ISM-Image-Source"] = "upload-spool"
         response.headers["X-Content-Type-Options"] = "nosniff"
         return response
+
+    # A direct /uploads hit may arrive before the page-open prefetch finishes.
+    # Queue the local copy without making this first request wait for it.
+    try:
+        queue_cache_path(filename, commit=True)
+    except Exception:
+        db.session.rollback()
+
     primary_root = _upload_root()
     # X-Accel-Redirect is configured only for the active root. Historical
     # local-root images fall back to Flask so old and new layouts can coexist.
@@ -640,9 +753,12 @@ def serve_image(filename):
         response = Response(mimetype=mimetypes.guess_type(path.name)[0] or "application/octet-stream")
         response.headers["X-Accel-Redirect"] = "/_ism_media/" + quote(filename, safe="/")
         response.headers["Vary"] = "Cookie"
+        response.headers["X-ISM-Image-Source"] = "storage"
         return response
     response = send_from_directory(str(actual_root), filename, conditional=True, max_age=IMAGE_CACHE_SECONDS)
     response.headers["Cache-Control"] = f"private, max-age={IMAGE_CACHE_SECONDS}, immutable"
     response.headers["Vary"] = "Cookie"
+    response.headers["X-ISM-Image-Source"] = "storage"
     response.headers["X-Content-Type-Options"] = "nosniff"
     return response
+

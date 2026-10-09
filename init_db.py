@@ -21,6 +21,7 @@ def initialize():
         app = create_app()
         with app.app_context():
             from app.image_uploads import ImageUploadSubmission, ImageSyncTask
+            from app.image_cache import ImageCacheTask, ImageViewLease
             db.create_all()
 
             # db.create_all() does not add columns to an existing table. Keep
